@@ -14,6 +14,8 @@ import {
   useXiaoZhi,
   useWidgetEvents,
   useWidgets,
+  useTimemap,
+  useHeartbeat,
   type PetMessage,
   type PetInfo,
 } from "@desktopfriends/core";
@@ -58,6 +60,9 @@ const showAddWidgetDialog = ref(false);
 // 小组件事件
 const { subscribe: subscribeWidgetEvent } = useWidgetEvents();
 
+// 时间表系统
+const timemap = useTimemap(currentPet.value.name);
+
 // 处理小组件事件（整点报时等）
 const handleWidgetEvent = async (event: WidgetEvent) => {
   console.log("Widget event:", event);
@@ -92,6 +97,7 @@ const handleWidgetEvent = async (event: WidgetEvent) => {
         llmConfig,
       );
       await agent.initAgent(llmConfig);
+      startHeartbeatIfNeeded();
     }
 
     // 发送事件消息 - agent 自动处理工具调用
@@ -199,6 +205,7 @@ const autoChatCooldown = ref(false);
 const currentMessage = ref("");
 const currentThinking = ref<string | null>(null); // 当前内心独白
 const isShowingThinking = ref(false); // 是否正在显示内心独白
+const isStreamingMessage = ref(false); // 是否正在流式输出
 const currentSpeaker = ref<string | null>(null); // 当前说话者（null 表示自己）
 const live2dRef = ref<InstanceType<typeof Live2DCanvas> | null>(null);
 
@@ -281,6 +288,7 @@ const agent = useLangChainAgent({
     },
     getWidgetContexts: () => getWidgetContexts(),
   },
+  timemapContext: timemap.toToolContext(),
 });
 
 // 监听 Live2D 模型动作/表情变化，自动更新 agent 工具
@@ -301,7 +309,84 @@ watch(
   }
 );
 
+// 心跳系统 - 定时检查时间表触发
+const heartbeat = useHeartbeat({
+  intervalMs: 60000,
+  onTrigger: async (entry) => {
+    if (!agent.isInitialized.value || agent.isLoading.value) return;
+
+    console.log(`[Heartbeat] Triggering: ${entry.time} - ${entry.action}`);
+
+    try {
+      isStreamingMessage.value = true;
+      currentMessage.value = "";
+
+      const response = await agent.sendMessageStream(
+        `[时间表触发: ${entry.time}] ${entry.action}`,
+        (event) => {
+          switch (event.type) {
+            case "text_delta":
+              isShowingThinking.value = false;
+              currentMessage.value += event.content;
+              currentSpeaker.value = null;
+              break;
+            case "thinking":
+              isShowingThinking.value = true;
+              currentMessage.value = event.content;
+              break;
+          }
+        },
+      );
+
+      isStreamingMessage.value = false;
+      timemap.markDone(entry.id);
+
+      if (response.content) {
+        isShowingThinking.value = false;
+        currentMessage.value = response.content;
+        currentSpeaker.value = null;
+        addPetMessage(currentPet.value.name, response.content);
+        scheduleBubbleClear();
+      } else {
+        currentMessage.value = "";
+      }
+    } catch (error) {
+      console.error("[Heartbeat] Trigger error:", error);
+      isStreamingMessage.value = false;
+      timemap.markDone(entry.id);
+    }
+  },
+  getTimemap: () => timemap.timemap.value,
+  markTriggered: (id) => timemap.markTriggered(id),
+  checkAndResetDate: () => timemap.checkAndResetDate(),
+});
+
 // 处理用户发送的消息
+let heartbeatStarted = false;
+const startHeartbeatIfNeeded = () => {
+  if (!heartbeatStarted && agent.isInitialized.value) {
+    heartbeatStarted = true;
+    heartbeat.start();
+    console.log("[HomeView] Heartbeat started");
+
+    // 如果当天没有时间表条目，让 Agent 自主创建
+    if (timemap.pendingEntries.value.length === 0 && timemap.entries.value.length === 0) {
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
+      agent
+        .sendMessage(
+          `[系统: 新的一天开始了，现在是 ${timeStr}。请用 addTimemapEntry 为今天剩余时间安排几个计划，比如在不同时间段向主人问好、提醒休息等。不需要回复文字，直接使用工具创建即可。]`,
+        )
+        .then(() => {
+          console.log("[HomeView] Timemap initialized by agent");
+        })
+        .catch((e: unknown) => {
+          console.warn("[HomeView] Failed to initialize timemap:", e);
+        });
+    }
+  }
+};
+
 const handleSendMessage = async (message: string) => {
   if (!message.trim()) return;
 
@@ -355,10 +440,34 @@ const handleSendMessage = async (message: string) => {
         llmConfig,
       );
       await agent.initAgent(llmConfig);
+      startHeartbeatIfNeeded();
     }
 
-    // 发送消息 - agent 会自动处理工具调用
-    const response = await agent.sendMessage(message);
+    // 发送消息 - 使用流式输出
+    isStreamingMessage.value = true;
+    currentMessage.value = "";
+
+    const response = await agent.sendMessageStream(message, (event) => {
+      switch (event.type) {
+        case 'text_delta':
+          isShowingThinking.value = false;
+          currentMessage.value += event.content;
+          currentSpeaker.value = null;
+          break;
+        case 'thinking':
+          isShowingThinking.value = true;
+          currentMessage.value = event.content;
+          break;
+        case 'tool_start':
+          console.log('[Agent] Tool start:', event.name);
+          break;
+        case 'tool_end':
+          console.log('[Agent] Tool end:', event.name, event.result);
+          break;
+      }
+    });
+
+    isStreamingMessage.value = false;
 
     // 显示回复（工具调用已在 agent 内部通过回调自动处理）
     if (response.content) {
@@ -366,9 +475,16 @@ const handleSendMessage = async (message: string) => {
       currentMessage.value = response.content;
       currentSpeaker.value = null;
       addPetMessage(currentPet.value.name, response.content);
+
+      // 流式完成后调度气泡清除
+      scheduleBubbleClear();
+    } else {
+      // 无回复内容，直接清除气泡
+      currentMessage.value = "";
     }
   } catch (error) {
     console.error("Chat error:", error);
+    isStreamingMessage.value = false;
     const errorMsg = "抱歉，出了点问题...";
     currentMessage.value = errorMsg;
     currentSpeaker.value = null;
@@ -443,6 +559,7 @@ async function handlePetMessage(message: PetMessage) {
           llmConfig,
         );
         await agent.initAgent(llmConfig);
+        startHeartbeatIfNeeded();
       }
 
       // 根据是否为直接目标，构造不同的上下文消息
@@ -577,13 +694,27 @@ const clearMessage = () => {
   if (
     settings.value.showBubble &&
     currentMessage.value &&
-    !currentSpeaker.value
+    !currentSpeaker.value &&
+    !isStreamingMessage.value
   ) {
-    const duration = calculateDisplayDuration(currentMessage.value);
-    setTimeout(() => {
-      currentMessage.value = "";
-    }, duration);
+    scheduleBubbleClear();
   }
+};
+
+// 调度气泡自动清除（根据字数计算显示时间）
+let messageClearTimer: ReturnType<typeof setTimeout> | null = null;
+const scheduleBubbleClear = () => {
+  // 取消之前的定时器
+  if (messageClearTimer) {
+    clearTimeout(messageClearTimer);
+    messageClearTimer = null;
+  }
+  if (!currentMessage.value) return;
+  const duration = calculateDisplayDuration(currentMessage.value);
+  messageClearTimer = setTimeout(() => {
+    messageClearTimer = null;
+    currentMessage.value = "";
+  }, duration);
 };
 
 // 测试：播放指定动作（通过组和索引）
@@ -805,6 +936,8 @@ onUnmounted(() => {
     clearTimeout(bubbleClearTimer);
     bubbleClearTimer = null;
   }
+  // 停止心跳
+  heartbeat.stop();
   // 注意：不断开 XiaoZhi 连接，因为可能还需要继续使用
 });
 </script>
@@ -1095,9 +1228,10 @@ onUnmounted(() => {
           (currentMessage || agent.isLoading.value || isAutoReplying) && settings.showBubble
         "
         :message="currentMessage"
-        :is-thinking="(agent.isLoading.value || isAutoReplying) && !isShowingThinking"
+        :is-thinking="((agent.isLoading.value || isAutoReplying) && !currentMessage) && !isShowingThinking"
         :is-inner-monologue="isShowingThinking"
         :speaker="currentSpeaker"
+        :is-streaming="isStreamingMessage"
         class="bubble"
         @vue:mounted="clearMessage"
       />

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted, computed } from 'vue'
+import { marked } from 'marked'
 
 export interface ChatMessage {
   id: string
@@ -10,11 +11,14 @@ export interface ChatMessage {
   avatar?: string
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   messages: ChatMessage[]
   petName: string
   maxMessages?: number
-}>()
+  enableMarkdown?: boolean
+}>(), {
+  enableMarkdown: true,
+})
 
 const containerRef = ref<HTMLElement | null>(null)
 const chatHistoryRef = ref<HTMLElement | null>(null)
@@ -166,6 +170,18 @@ onUnmounted(() => {
 defineExpose({
   resetPosition,
 })
+
+// Markdown 渲染
+marked.setOptions({ breaks: true, gfm: true })
+const renderMarkdown = (text: string): string | null => {
+  if (props.enableMarkdown === false) return null
+  try {
+    // 使用 parseInline 避免 <p> 包裹
+    return marked.parseInline(text) as string
+  } catch {
+    return null
+  }
+}
 </script>
 
 <template>
@@ -222,7 +238,13 @@ defineExpose({
               <template v-if="message.speaker === 'thinking'">💭 {{ message.name }}</template>
               <template v-else>{{ message.name }}</template>
             </span>
-            <span class="message-text" :class="{ 'thinking-text': message.speaker === 'thinking' }">{{ message.content }}</span>
+            <span
+              v-if="renderMarkdown(message.content)"
+              class="message-text markdown-inline"
+              :class="{ 'thinking-text': message.speaker === 'thinking' }"
+              v-html="renderMarkdown(message.content)"
+            ></span>
+            <span v-else class="message-text" :class="{ 'thinking-text': message.speaker === 'thinking' }">{{ message.content }}</span>
           </div>
         </div>
       </TransitionGroup>
@@ -430,6 +452,27 @@ defineExpose({
   color: rgba(255, 255, 255, 0.95);
   line-height: 1.4;
   word-break: break-word;
+}
+
+/* Markdown inline 样式 */
+.markdown-inline :deep(code) {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.markdown-inline :deep(strong) {
+  font-weight: 600;
+}
+
+.markdown-inline :deep(em) {
+  font-style: italic;
+}
+
+.markdown-inline :deep(a) {
+  color: #93c5fd;
+  text-decoration: none;
 }
 
 .empty-state {

@@ -25,9 +25,13 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 
 ### AI Agent System
 - **Custom PetAgent Engine** — A from-scratch ReAct agent that calls LLM APIs via native `fetch`, executes tool calls, and loops up to 5 iterations to resolve complex requests
+- **Modular Architecture** — Split into `LLMClient` (API calls + streaming), `ToolManager` (tool registration & execution), and `PetAgent` (orchestration)
 - **Multi-LLM Support** — Works with OpenAI, Claude, DeepSeek, and any OpenAI-compatible API
+- **Streaming Responses** — Real-time token-by-token output via SSE parsing (both OpenAI and Claude stream formats)
+- **Markdown Rendering** — Chat bubbles render Markdown (bold, code, lists) with a streaming cursor animation
 - **Cognitive System** — `innerThought` for internal monologue (shown as a distinct bubble style) + `shouldReply` for selective response (the pet can choose not to reply)
 - **Expression State Tracking** — Automatically tracks the current facial expression and prompts reset after 30 seconds
+- **Timemap System** — Agent-managed daily schedule with heartbeat-driven execution (see below)
 
 ### Live2D Model Analyzer
 - **Rule-based Mode** — Pre-defined emotion mapping table for fast motion/expression parsing
@@ -38,6 +42,14 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 - **Desktop Widgets** — Clock, Photo Album, Weather, and Todo List
 - **Agent-controllable** — The AI agent can view, add, and complete todo items through tool calls
 - **Customizable Layout** — Drag-and-drop positioning and resizing
+
+### Timemap & Heartbeat System
+- **Agent-driven Schedule** — The pet autonomously creates a daily schedule (e.g., "say good afternoon at 2pm") using tool calls
+- **Local Heartbeat** — A 60-second interval timer checks the schedule purely locally — no LLM tokens consumed per tick
+- **On-time Execution** — When a scheduled entry is due, the heartbeat triggers the agent to act (streaming response displayed as a chat bubble)
+- **User Reminders** — Users can say "remind me to drink water at 3pm" and the agent creates a timemap entry
+- **Persistent & Cross-day** — Stored in localStorage; `daily` entries carry over across days, `once` entries auto-expire
+- **Different from OpenClaw cron** — OpenClaw's heartbeat is a server-side keep-alive mechanism; Timemap is a client-side, agent-managed semantic schedule where the AI decides *what* to do and *when*
 
 ### Live2D & Interaction
 - **Live2D Rendering** — Smooth Live2D model display with motion and expression switching
@@ -72,7 +84,7 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 | Desktop | Tauri 1.6 (macOS) |
 | Mobile | Capacitor 6 (Android) |
 | Live2D | PixiJS 6 + pixi-live2d-display |
-| AI Agent | Custom ReAct engine + native fetch |
+| AI Agent | Custom ReAct engine + native fetch (streaming SSE) |
 | Backend | Fastify + Socket.io |
 | Monorepo | pnpm workspaces |
 
@@ -90,17 +102,22 @@ DesktopFriends/
 │   │   └── src/
 │   │       ├── agent/            # AI Agent system
 │   │       │   ├── PetAgent.ts       # ReAct loop engine
+│   │       │   ├── llmClient.ts      # LLM API client (streaming)
+│   │       │   ├── toolManager.ts    # Tool registration & execution
 │   │       │   ├── memory.ts         # Conversation memory
 │   │       │   └── prompts.ts        # Dynamic prompt generation
 │   │       ├── tools/            # Agent tool set
 │   │       │   ├── live2d.tools.ts       # Motion / expression control
 │   │       │   ├── cognitive.tools.ts    # Thinking / decision
 │   │       │   ├── widget.tools.ts       # Widget interaction
+│   │       │   ├── timemap.tools.ts      # Schedule management
 │   │       │   ├── communication.tools.ts # Multi-pet messaging
 │   │       │   ├── plugin.tools.ts       # Plugin adapter
 │   │       │   └── modelAnalyzer.ts      # Model analyzer
 │   │       └── composables/      # Vue Composables
-│   │           ├── useChat.ts
+│   │           ├── useAgent.ts       # Agent composable
+│   │           ├── useTimemap.ts     # Schedule data management
+│   │           ├── useHeartbeat.ts   # Heartbeat scheduler
 │   │           ├── useSettings.ts
 │   │           ├── useP2P.ts
 │   │           └── ...
@@ -204,20 +221,24 @@ Then in Android Studio: Build > Build Bundle(s) / APK(s) > Build APK(s).
 │                  PetAgent                       │
 │            (ReAct Loop Engine)                  │
 │                                                 │
-│  User message → LLM API (native fetch)         │
+│  User message → LLMClient (streaming fetch)    │
 │      ↓                                          │
-│  Parse tool calls → Execute tools → Collect     │
+│  Parse tool calls → ToolManager executes        │
 │      ↓                                          │
 │  Append tool results → Call LLM again           │
 │      ↓                                          │
 │  No tool calls or max iterations (5) → Return   │
 ├─────────────────────────────────────────────────┤
-│  Tool Set                                       │
+│  Tool Set (via ToolManager)                     │
 │  ├── Live2D Tools (playMotion, setExpression)   │
 │  ├── Cognitive Tools (innerThought, shouldReply)│
 │  ├── Widget Tools (getTodos, addTodo, ...)      │
+│  ├── Timemap Tools (addEntry, viewTimemap, ...) │
 │  ├── Communication Tools (sendToPet, broadcast) │
 │  └── Plugin Tools (external extensions)         │
+├─────────────────────────────────────────────────┤
+│  useHeartbeat (60s)                             │
+│  └── Check timemap → trigger agent on schedule  │
 ├─────────────────────────────────────────────────┤
 │  Memory (message history + localStorage)        │
 └─────────────────────────────────────────────────┘
@@ -257,13 +278,19 @@ Then in Android Studio: Build > Build Bundle(s) / APK(s) > Build APK(s).
 - [x] Shared packages (core / ui / platform / shared)
 - [x] **AI Agent System**
   - [x] Custom ReAct loop engine (PetAgent)
+  - [x] Modular architecture (LLMClient + ToolManager + PetAgent)
   - [x] Multi-LLM support (OpenAI / Claude / DeepSeek / custom)
+  - [x] Streaming responses (SSE parsing for OpenAI & Claude)
+  - [x] Markdown rendering in chat bubbles (with streaming cursor)
   - [x] Live2D model analyzer (rule-based + LLM-enhanced)
   - [x] Cognitive tools (innerThought + shouldReply)
   - [x] Widget tools (todo management, etc.)
+  - [x] **Timemap tools (agent-managed daily schedule)**
   - [x] Multi-pet communication tools
   - [x] Plugin tool adapter
   - [x] Expression state tracking (30s timeout reset)
+  - [x] **Heartbeat system (60s local timer for schedule execution)**
+  - [x] Connection testing (LLMClient.testConnection)
 - [x] **Desktop App (Tauri - macOS)**
   - [x] Transparent frameless window
   - [x] Click-through

@@ -23,9 +23,13 @@
 
 ### AI Agent 系统
 - **自研 PetAgent** - 手搓的 Agent 引擎，使用原生 fetch 调用 LLM API，实现完整的 ReAct 工具调用循环（最多 5 轮迭代）
+- **模块化架构** - 拆分为 `LLMClient`（API 调用 + 流式输出）、`ToolManager`（工具注册与执行）、`PetAgent`（编排层）
 - **多 LLM 支持** - 兼容 OpenAI / Claude / DeepSeek / 自定义 API（OpenAI 兼容格式）
+- **流式响应** - 基于 SSE 解析的逐字实时输出（支持 OpenAI 和 Claude 两种流式格式）
+- **Markdown 渲染** - 聊天气泡支持 Markdown（粗体、代码、列表），带流式打字光标动画
 - **认知系统** - `innerThought`（内心独白）以不同气泡样式展示 + `shouldReply`（选择性回复）机制
 - **表情状态追踪** - 自动追踪当前表情状态，30 秒超时自动提醒重置
+- **时间表系统** - Agent 自主管理的每日计划 + 心跳驱动执行（详见下方）
 
 ### Live2D 模型分析器
 - **规则模式** - 预定义情绪映射表，快速解析模型的动作/表情
@@ -36,6 +40,14 @@
 - **桌面小组件** - 时钟 / 相册 / 天气 / 待办事项
 - **Agent 可操控** - AI Agent 可通过工具调用查看/添加/完成待办事项
 - **自定义布局** - 支持拖拽和调整大小
+
+### 时间表 & 心跳系统
+- **Agent 自主排程** - 宠物通过工具调用自主创建当天计划（如"下午2点跟主人说下午好"）
+- **本地心跳** - 每 60 秒检查一次时间表，纯本地逻辑，不消耗 LLM Token
+- **准时执行** - 条目到期时，心跳触发 Agent 执行对应任务（流式输出显示为聊天气泡）
+- **用户提醒** - 用户可以说"3点提醒我喝水"，Agent 会自动创建时间表条目
+- **持久化 & 跨天** - 存储在 localStorage，`daily` 条目跨天保留，`once` 条目自动过期
+- **与 OpenClaw cron 的区别** - OpenClaw 的心跳是服务端的连接保活机制；时间表是客户端的、Agent 自主管理的语义化日程，由 AI 决定做什么、什么时候做
 
 ### 通用功能
 - **Live2D 渲染** - 流畅的 Live2D 模型展示，支持动作和表情切换
@@ -69,7 +81,7 @@
 | 桌面端打包 | Tauri 1.6 (macOS) |
 | 移动端打包 | Capacitor 6 (Android) |
 | Live2D 渲染 | PixiJS 6 + pixi-live2d-display |
-| AI Agent | 自研 ReAct 引擎 + 原生 fetch |
+| AI Agent | 自研 ReAct 引擎 + 原生 fetch（流式 SSE）|
 | 后端服务 | Fastify + Socket.io |
 | 包管理 | pnpm (monorepo) |
 
@@ -87,17 +99,22 @@ DesktopFriends/
 │   │   └── src/
 │   │       ├── agent/            # AI Agent 系统
 │   │       │   ├── PetAgent.ts       # ReAct 循环引擎
+│   │       │   ├── llmClient.ts      # LLM API 客户端（流式）
+│   │       │   ├── toolManager.ts    # 工具注册与执行
 │   │       │   ├── memory.ts         # 对话记忆管理
 │   │       │   └── prompts.ts        # 动态提示词生成
 │   │       ├── tools/            # Agent 工具集
 │   │       │   ├── live2d.tools.ts       # 动作/表情控制
 │   │       │   ├── cognitive.tools.ts    # 思考/决策
 │   │       │   ├── widget.tools.ts       # 小组件交互
+│   │       │   ├── timemap.tools.ts      # 时间表管理
 │   │       │   ├── communication.tools.ts # 多宠物通信
 │   │       │   ├── plugin.tools.ts       # 插件适配
 │   │       │   └── modelAnalyzer.ts      # 模型分析器
 │   │       └── composables/      # Vue Composables
-│   │           ├── useChat.ts
+│   │           ├── useAgent.ts       # Agent Composable
+│   │           ├── useTimemap.ts     # 时间表数据管理
+│   │           ├── useHeartbeat.ts   # 心跳调度器
 │   │           ├── useSettings.ts
 │   │           ├── useP2P.ts
 │   │           ├── useChatHistory.ts
@@ -211,20 +228,24 @@ npx cap open android
 │                  PetAgent                       │
 │            (ReAct Loop Engine)                  │
 │                                                 │
-│  用户消息 → LLM API (原生 fetch)               │
+│  用户消息 → LLMClient (流式 fetch)             │
 │      ↓                                          │
-│  解析工具调用 → 执行工具 → 收集结果             │
+│  解析工具调用 → ToolManager 执行工具            │
 │      ↓                                          │
 │  添加工具结果 → 再次调用 LLM                   │
 │      ↓                                          │
 │  无工具调用或达到上限(5轮) → 返回最终回复      │
 ├─────────────────────────────────────────────────┤
-│  工具集                                         │
+│  工具集 (通过 ToolManager 管理)                 │
 │  ├── Live2D Tools (playMotion, setExpression)   │
 │  ├── Cognitive Tools (innerThought, shouldReply)│
 │  ├── Widget Tools (getTodos, addTodo, ...)      │
+│  ├── Timemap Tools (addEntry, viewTimemap, ...) │
 │  ├── Communication Tools (sendToPet, broadcast) │
 │  └── Plugin Tools (外部插件扩展)               │
+├─────────────────────────────────────────────────┤
+│  useHeartbeat (每60秒)                          │
+│  └── 检查时间表 → 到期条目触发 Agent 执行       │
 ├─────────────────────────────────────────────────┤
 │  Memory (消息记忆 + localStorage 持久化)        │
 └─────────────────────────────────────────────────┘
@@ -264,13 +285,19 @@ npx cap open android
 - [x] 共享包架构 (core/ui/platform/shared)
 - [x] **AI Agent 系统**
   - [x] 自研 ReAct 循环引擎 (PetAgent)
+  - [x] 模块化架构 (LLMClient + ToolManager + PetAgent)
   - [x] 多 LLM 支持 (OpenAI/Claude/DeepSeek/自定义)
+  - [x] 流式响应 (SSE 解析，支持 OpenAI 和 Claude 格式)
+  - [x] Markdown 渲染聊天气泡（含流式打字光标）
   - [x] Live2D 模型分析器（规则模式 + LLM 增强模式）
   - [x] 认知工具 (innerThought + shouldReply)
   - [x] 小组件工具 (待办事项管理等)
+  - [x] **时间表工具 (Agent 自主管理的每日计划)**
   - [x] 多宠物通信工具
   - [x] 插件工具适配层
   - [x] 表情状态追踪（30 秒超时重置）
+  - [x] **心跳系统 (60 秒本地定时器驱动时间表执行)**
+  - [x] 连接测试 (LLMClient.testConnection)
 - [x] **桌面端应用 (Tauri - macOS)**
   - [x] 透明无边框窗口
   - [x] 点击穿透功能

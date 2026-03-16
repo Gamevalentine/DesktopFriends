@@ -44,6 +44,7 @@ export default defineConfig({
           text: '功能',
           items: [
             { text: 'AI 对话', link: '/guide/ai-chat' },
+            { text: '时间表系统', link: '/guide/timemap' },
             { text: '多设备联动', link: '/guide/multiplayer' },
             { text: '自定义模型', link: '/guide/custom-model' },
           ]

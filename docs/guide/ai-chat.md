@@ -1,90 +1,87 @@
 # AI 对话
 
-DesktopFriends 支持多种 AI 服务，让你的桌面宠物能够进行智能对话。
+DesktopFriends 内置了 AI Agent 系统，让你的桌面宠物能够进行智能对话、控制表情动作、管理日程等。
 
-## 支持的 AI 服务
+## 支持的 LLM 服务
 
-### Ollama（推荐）
-
-Ollama 是一个本地运行的 AI 服务，无需联网，保护隐私。
-
-```bash
-# 安装 Ollama
-curl -fsSL https://ollama.com/install.sh | sh
-
-# 下载模型
-ollama pull llama3.2
-
-# 启动服务
-ollama serve
-```
-
-在服务器配置中设置：
-```
-AI_PROVIDER=ollama
-OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=llama3.2
-```
+所有 AI 配置都在 **应用内的设置页面** 完成，无需配置服务器或环境变量。
 
 ### OpenAI
+- 兼容 GPT-4o、GPT-4o-mini 等模型
+- 需要 API Key
+- 默认 API 地址：`https://api.openai.com`
 
-使用 OpenAI 的 GPT 模型：
+### Claude (Anthropic)
+- 兼容 Claude 3.5 Sonnet、Claude 3 Haiku 等模型
+- 需要 API Key
+- 使用 Anthropic Messages API 格式
 
-```
-AI_PROVIDER=openai
-OPENAI_API_KEY=your-api-key
-OPENAI_MODEL=gpt-4o-mini
-```
+### DeepSeek
+- 兼容 DeepSeek-V3、DeepSeek-Chat 等模型
+- 需要 API Key
+- OpenAI 兼容格式
 
-### Google Gemini
+### 自定义 API
+- 任何兼容 OpenAI Chat Completions 格式的 API
+- 可自定义 Base URL
+- 适用于本地 Ollama、LM Studio、vLLM 等
 
-使用 Google 的 Gemini 模型：
+## 配置步骤
 
-```
-AI_PROVIDER=gemini
-GEMINI_API_KEY=your-api-key
-GEMINI_MODEL=gemini-1.5-flash
-```
+1. 打开应用，进入 **设置** 页面
+2. 在 **AI 配置** 区域：
+   - 选择 **服务商**（OpenAI / Claude / DeepSeek / 自定义）
+   - 输入 **API Key**
+   - （可选）修改 **Base URL** 和 **模型名称**
+3. 点击 **测试连接** 验证配置是否正确
+4. 返回主页即可开始对话
 
-## 配置文件
+::: tip 提示
+测试连接会自动检测 API Key 是否有效，并列出可用的模型。
+:::
 
-在 `apps/server` 目录下创建 `.env` 文件：
+## Agent 能力
 
-```bash
-# AI 配置
-AI_PROVIDER=ollama
-OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=llama3.2
+配置 AI 后，宠物不仅能聊天，还拥有以下能力：
 
-# 或者使用 OpenAI
-# AI_PROVIDER=openai
-# OPENAI_API_KEY=sk-xxx
-# OPENAI_MODEL=gpt-4o-mini
+### 表情动作控制
+- 宠物会在对话中自动选择合适的表情和动作
+- 通过 `playMotion` 和 `setExpression` 工具实现
+- 表情 30 秒后自动重置
 
-# 角色设定
-CHARACTER_NAME=小助手
-CHARACTER_PROMPT=你是一个可爱的桌面宠物，性格活泼开朗
-```
+### 内心独白
+- 宠物有时会先思考再回答（`innerThought` 工具）
+- 内心想法会以不同样式的气泡展示
+- 宠物可以选择不回复（`shouldReply` 工具）
 
-## 语音功能（开发中）
+### 小组件交互
+- 获取当前时间
+- 管理待办事项（查看 / 添加 / 完成）
+- 获取小组件状态信息
 
-### 语音输入
+### 时间表管理
+- 自主创建每日计划
+- 到期时主动与主人互动
+- 详见 [时间表系统](/guide/timemap)
 
-应用支持使用手机麦克风进行语音输入，自动转换为文字发送给 AI。
-
-### 语音输出 (TTS)
-
-支持多种 TTS 服务：
-
-- **系统 TTS**：使用安卓系统自带的语音合成
-- **Edge TTS**：使用微软 Edge 的在线语音合成
-- **自定义 TTS**：接入第三方 TTS API
+### 流式输出
+- 回复内容逐字显示（打字机效果）
+- 支持 Markdown 格式渲染（粗体、代码块、列表等）
 
 ## 人设设置
 
-可以设置角色人设，让对话更有趣
+在设置页面可以自定义宠物的人设提示词，支持 `{petName}` 占位符：
+
+```
+你是一只名叫「{petName}」的可爱桌面宠物。
+性格特点：
+- 活泼开朗，有点傲娇
+- 善良体贴，关心主人
+- 回复简洁可爱，不超过 50 字
+```
 
 ## 下一步
 
+- [时间表系统](/guide/timemap) - 了解宠物的日程管理能力
 - [多设备联动](/guide/multiplayer) - 设置设备连接
 - [自定义模型](/guide/custom-model) - 更换角色模型

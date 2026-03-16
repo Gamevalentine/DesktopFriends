@@ -6,7 +6,7 @@
  * 封装 PetAgent 类，提供响应式状态管理
  */
 import { ref, shallowRef, computed, onUnmounted } from 'vue'
-import { PetAgent, type PetAgentConfig, type AgentResponse } from '../agent'
+import { PetAgent, type PetAgentConfig, type AgentResponse, type AgentStreamEvent } from '../agent'
 import type { ModelAnalysisResult, ParsedMotion, ParsedExpression } from '../tools'
 import { analyzeMotionsWithLLM } from '../tools'
 import type { LLMConfig } from '@desktopfriends/shared'
@@ -40,11 +40,16 @@ export interface UseLangChainAgentOptions {
 
   // 可选：外部插件工具（桌面端插件系统）
   pluginTools?: StructuredToolInterface[]
+
+  // 可选：时间表上下文
+  timemapContext?: PetAgentConfig['timemapContext']
 }
 
 export function useLangChainAgent(options: UseLangChainAgentOptions) {
   // ============ 响应式状态 ============
   const isLoading = ref(false)
+  const isStreaming = ref(false)
+  const streamingContent = ref('')
   const error = ref<Error | null>(null)
   const lastResponse = shallowRef<AgentResponse | null>(null)
   const thinking = ref<string | null>(null)
@@ -63,6 +68,7 @@ export function useLangChainAgent(options: UseLangChainAgentOptions) {
   const widgetContext = shallowRef<PetAgentConfig['widgetContext']>(options.widgetContext)
   const p2pContext = shallowRef<PetAgentConfig['p2pContext']>(options.p2pContext)
   const pluginTools = shallowRef<StructuredToolInterface[] | undefined>(options.pluginTools)
+  const timemapContext = shallowRef<PetAgentConfig['timemapContext']>(options.timemapContext)
 
   // 表情自动重置定时器
   let expressionResetTimer: ReturnType<typeof setTimeout> | null = null
@@ -137,6 +143,7 @@ export function useLangChainAgent(options: UseLangChainAgentOptions) {
         widgetContext: widgetContext.value,
         p2pContext: p2pContext.value,
         pluginTools: pluginTools.value,
+        timemapContext: timemapContext.value,
       }
 
       agent.value = new PetAgent(config)
@@ -171,6 +178,60 @@ export function useLangChainAgent(options: UseLangChainAgentOptions) {
       throw e
     } finally {
       isLoading.value = false
+    }
+  }
+
+  /**
+   * 发送消息并获取回复（流式）
+   * @param content 用户消息内容
+   * @param onDelta 文本片段回调，用于实时更新 UI
+   * @returns Agent 响应
+   */
+  const sendMessageStream = async (
+    content: string,
+    onDelta?: (event: AgentStreamEvent) => void,
+  ): Promise<AgentResponse> => {
+    if (!agent.value) {
+      throw new Error('Agent not initialized. Call initAgent first.')
+    }
+
+    isLoading.value = true
+    isStreaming.value = true
+    streamingContent.value = ''
+    error.value = null
+    thinking.value = null
+
+    try {
+      let finalResponse: AgentResponse | null = null
+
+      for await (const event of agent.value.sendMessageStream(content)) {
+        onDelta?.(event)
+
+        switch (event.type) {
+          case 'text_delta':
+            streamingContent.value += event.content
+            break
+          case 'thinking':
+            thinking.value = event.content
+            break
+          case 'done':
+            finalResponse = event.response
+            lastResponse.value = event.response
+            break
+        }
+      }
+
+      if (!finalResponse) {
+        throw new Error('Stream ended without done event')
+      }
+
+      return finalResponse
+    } catch (e) {
+      error.value = e as Error
+      throw e
+    } finally {
+      isLoading.value = false
+      isStreaming.value = false
     }
   }
 
@@ -373,6 +434,16 @@ export function useLangChainAgent(options: UseLangChainAgentOptions) {
   }
 
   /**
+   * 设置时间表上下文
+   */
+  const setTimemapContext = async (context: PetAgentConfig['timemapContext']) => {
+    timemapContext.value = context
+    if (agent.value) {
+      await agent.value.updateConfig({ timemapContext: context })
+    }
+  }
+
+  /**
    * 更新 LLM 配置
    */
   const updateLLMConfig = async (config: LLMConfig) => {
@@ -439,6 +510,8 @@ export function useLangChainAgent(options: UseLangChainAgentOptions) {
   return {
     // 状态
     isLoading,
+    isStreaming,
+    streamingContent,
     isInitialized,
     error,
     lastResponse,
@@ -453,6 +526,7 @@ export function useLangChainAgent(options: UseLangChainAgentOptions) {
     // 核心方法
     initAgent,
     sendMessage,
+    sendMessageStream,
 
     // 配置方法
     setModelAnalysis,
@@ -461,6 +535,7 @@ export function useLangChainAgent(options: UseLangChainAgentOptions) {
     setWidgetContext,
     setP2PContext,
     setPluginTools,
+    setTimemapContext,
     updateLLMConfig,
     updatePetInfo,
     clearHistory

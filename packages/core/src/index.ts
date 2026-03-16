@@ -69,10 +69,15 @@ export type {
 export { useWidgets } from './composables/useWidgets'
 export { useWidgetEvents } from './composables/useWidgetEvents'
 
+// 时间表相关 Composable 导出
+export { useTimemap } from './composables/useTimemap'
+export { useHeartbeat } from './composables/useHeartbeat'
+export type { HeartbeatOptions } from './composables/useHeartbeat'
+
 // Agent 相关导出
 export { useLangChainAgent } from './composables/useAgent'
-export { PetAgent } from './agent'
-export type { PetAgentConfig, AgentResponse } from './agent'
+export { PetAgent, LLMClient, ToolManager } from './agent'
+export type { PetAgentConfig, AgentResponse, AgentStreamEvent, OpenAIToolDefinition, RawToolCall, StreamChunk, TestConnectionResult } from './agent'
 
 // 新增工具导出
 export {
@@ -90,6 +95,7 @@ export {
   createCognitiveTools,
   createCommunicationTools,
   createPluginTools,
+  createTimemapTools,
 } from './tools'
 
 // 新增类型导出
@@ -102,4 +108,5 @@ export type {
   PluginToolDefinition,
   PluginManifest,
   PluginToolExecutor,
+  TimemapToolContext,
 } from './tools'
