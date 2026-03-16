@@ -129,3 +129,4 @@ export interface ClientToServerEvents {
 // Widget types
 export * from './widget'
 export * from './weatherTypes'
+export * from './timemap'

@@ -20,21 +20,21 @@ features:
   - icon: 🎭
     title: Live2D 模型
     details: 支持加载自定义 Live2D 模型，让你喜欢的角色陪伴在桌面
-  - icon: 💬
-    title: AI 对话
-    details: 集成多种 AI 服务（Ollama、OpenAI、Google Gemini），与桌面宠物自然对话
+  - icon: 🤖
+    title: AI Agent 系统
+    details: 自研 ReAct 引擎，支持 OpenAI / Claude / DeepSeek，流式输出 + Markdown 渲染 + 工具调用
   - icon: 📱
     title: 多宠物联动
     details: 其他宠物会随时收听到你的对话并会尝试加入对话，他们也会相互交流，通过局域网无缝连接
-  - icon: ⚡
-    title: 表情动作封装
-    details: AI 会根据情况使用包括模型所有的表情与动作，让对话更加生动
+  - icon: ⏰
+    title: 时间表系统
+    details: 宠物自主创建每日计划（问好、提醒等），心跳定时器到期自动执行，用户也可以让宠物设置提醒
   - icon: 🎨
     title: 高度可定制
-    details: 自定义模型、动作、表情，打造专属的桌面伙伴
-  - icon: 🎤
-    title: 语音交互（开发中）
-    details: 支持语音输入和 VTS 语音合成，实现真正的语音对话体验
+    details: 自定义模型、动作、表情、小组件、背景，打造专属的桌面伙伴
+  - icon: 🧩
+    title: 小组件系统
+    details: 时钟、相册、天气、待办事项，AI 可以直接操控小组件
 ---
 
 <div class="custom-home">

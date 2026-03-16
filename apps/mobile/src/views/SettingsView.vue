@@ -19,6 +19,7 @@ import {
   useChatHistory,
   DEFAULT_PET_PROMPT,
   PRESET_BACKGROUNDS,
+  LLMClient,
   type DiscoveredServer,
 } from "@desktopfriends/core";
 import { useLocalServer } from "../composables/useLocalServer";
@@ -171,7 +172,7 @@ const useUploadedModel = async (modelName: string) => {
     });
 
     const modelFile = files.files.find(
-      (f) => f.name.endsWith(".model3.json") || f.name.endsWith(".model.json")
+      (f) => f.name.endsWith(".model3.json") || f.name.endsWith(".model.json"),
     );
 
     if (modelFile) {
@@ -228,12 +229,12 @@ watch(
   (state) => {
     console.log("[SettingsView] P2P state changed:", state);
   },
-  { immediate: true, deep: true }
+  { immediate: true, deep: true },
 );
 
 // 使用 computed 确保响应式追踪
 const isServerConnected = computed(
-  () => p2p.isConnected.value && p2p.isRegistered.value
+  () => p2p.isConnected.value && p2p.isRegistered.value,
 );
 const onlinePetsCount = computed(() => p2p.onlinePets.value.length);
 
@@ -242,7 +243,7 @@ const isLLMConfigured = computed(() => !!settings.value.llmApiKey);
 const llmStatusText = computed(() => {
   if (!settings.value.llmApiKey) return "未配置";
   const provider = llmProviders.find(
-    (p) => p.value === settings.value.llmProvider
+    (p) => p.value === settings.value.llmProvider,
   );
   return provider?.label || settings.value.llmProvider;
 });
@@ -294,61 +295,19 @@ const showBaseUrlHint = computed(() => {
 });
 
 const testConnection = async () => {
-  if (!settings.value.llmApiKey) {
-    snackbarMessage.value = "请先输入 API Key";
-    snackbarType.value = "error";
-    showSnackbar.value = true;
-    return;
-  }
-
-  // 自定义 API 必须填写地址
-  if (settings.value.llmProvider === "custom" && !settings.value.llmBaseUrl) {
-    snackbarMessage.value = "自定义 API 需要填写 API 地址";
-    snackbarType.value = "error";
-    showSnackbar.value = true;
-    return;
-  }
-
   snackbarMessage.value = "测试连接中...";
   snackbarType.value = "info";
   showSnackbar.value = true;
 
-  // 简单的连接测试
-  try {
-    const config = getLLMConfig();
-    let url = config.baseUrl;
-    let headers: Record<string, string> = {};
+  const config = getLLMConfig();
+  const result = await LLMClient.testConnection(config);
 
-    if (config.provider === "openai" || config.provider === "deepseek") {
-      url =
-        url ||
-        (config.provider === "openai"
-          ? "https://api.openai.com/v1/models"
-          : "https://api.deepseek.com/v1/models");
-      headers = { Authorization: `Bearer ${config.apiKey}` };
-    } else if (config.provider === "claude") {
-      // Claude doesn't have a simple health check endpoint
-      snackbarMessage.value = "Claude API Key 已保存，发送消息时验证";
-      snackbarType.value = "success";
-      showSnackbar.value = true;
-      return;
-    } else if (config.provider === "custom") {
-      // 自定义 API，尝试获取 models 列表或直接测试
-      url = config.baseUrl!.replace("/chat/completions", "/models");
-      headers = { Authorization: `Bearer ${config.apiKey}` };
-    }
-
-    const response = await fetch(url!, { headers, method: "GET" });
-
-    if (response.ok) {
-      snackbarMessage.value = "连接成功！";
-      snackbarType.value = "success";
-    } else {
-      snackbarMessage.value = `连接失败: ${response.status}`;
-      snackbarType.value = "error";
-    }
-  } catch (e) {
-    snackbarMessage.value = "连接失败，请检查网络或代理设置";
+  if (result.success) {
+    const latency = result.latencyMs ? ` (${result.latencyMs}ms)` : "";
+    snackbarMessage.value = `${result.message}${latency}`;
+    snackbarType.value = "success";
+  } else {
+    snackbarMessage.value = result.message;
     snackbarType.value = "error";
   }
   showSnackbar.value = true;
@@ -658,7 +617,7 @@ const handleFileSelect = async (event: Event) => {
 const compressImage = (
   file: File,
   maxWidth: number,
-  quality: number
+  quality: number,
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -838,7 +797,9 @@ const handleClearBackground = () => {
         <div class="current-pet-settings">
           <MdInput
             :modelValue="currentPet.name"
-            @update:modelValue="(v: string) => updatePet(currentPet.id, { name: v })"
+            @update:modelValue="
+              (v: string) => updatePet(currentPet.id, { name: v })
+            "
             label="宠物名称"
             hint="给你的宠物起个名字吧"
           />
@@ -861,7 +822,9 @@ const handleClearBackground = () => {
             <!-- 当前模型路径 -->
             <MdInput
               :modelValue="currentPet.modelPath"
-              @update:modelValue="(v: string) => updatePet(currentPet.id, { modelPath: v })"
+              @update:modelValue="
+                (v: string) => updatePet(currentPet.id, { modelPath: v })
+              "
               label="模型路径"
               hint="上传 zip 模型包或手动输入路径"
             />
@@ -917,7 +880,9 @@ const handleClearBackground = () => {
 
           <MdTextarea
             :modelValue="currentPet.prompt"
-            @update:modelValue="(v: string) => updatePet(currentPet.id, { prompt: v })"
+            @update:modelValue="
+              (v: string) => updatePet(currentPet.id, { prompt: v })
+            "
             label="人设 (Prompt)"
             :rows="5"
             hint="自定义宠物的性格和说话方式，使用 {petName} 代表宠物名称"
@@ -1126,8 +1091,8 @@ const handleClearBackground = () => {
                 isStartingServer
                   ? "启动中..."
                   : environment.canRunServer
-                  ? "一键启动服务器"
-                  : "查看启动指南"
+                    ? "一键启动服务器"
+                    : "查看启动指南"
               }}
             </MdButton>
             <MdButton v-else @click="handleStopServer" class="stop-server-btn">
@@ -1239,13 +1204,13 @@ const handleClearBackground = () => {
                     backgroundPosition: 'center',
                   }
                 : settings.backgroundType === 'preset' &&
-                  settings.backgroundPreset
-                ? {
-                    background: PRESET_BACKGROUNDS.find(
-                      (p) => p.id === settings.backgroundPreset
-                    )?.value,
-                  }
-                : { background: settings.backgroundGradient }
+                    settings.backgroundPreset
+                  ? {
+                      background: PRESET_BACKGROUNDS.find(
+                        (p) => p.id === settings.backgroundPreset,
+                      )?.value,
+                    }
+                  : { background: settings.backgroundGradient }
             "
           >
             <div class="preview-overlay">
@@ -1253,7 +1218,7 @@ const handleClearBackground = () => {
               <span v-else-if="settings.backgroundType === 'preset'">
                 {{
                   PRESET_BACKGROUNDS.find(
-                    (p) => p.id === settings.backgroundPreset
+                    (p) => p.id === settings.backgroundPreset,
                   )?.name
                 }}
               </span>

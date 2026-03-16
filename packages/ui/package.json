@@ -26,8 +26,9 @@
   },
   "dependencies": {
     "@desktopfriends/core": "workspace:*",
-    "@desktopfriends/shared": "workspace:*",
     "@desktopfriends/platform": "workspace:*",
+    "@desktopfriends/shared": "workspace:*",
+    "marked": "^17.0.4",
     "pixi-live2d-display": "^0.4.0",
     "pixi.js": "6.5.10"
   },

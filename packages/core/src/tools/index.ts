@@ -40,3 +40,7 @@ export { createCommunicationTools } from './communication.tools'
 // 插件工具适配层
 export { createPluginTools } from './plugin.tools'
 export type { PluginToolDefinition, PluginManifest, PluginToolExecutor } from './plugin.tools'
+
+// 时间表工具
+export { createTimemapTools } from './timemap.tools'
+export type { TimemapToolContext } from './timemap.tools'

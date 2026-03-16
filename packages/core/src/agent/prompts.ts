@@ -15,8 +15,9 @@ export function createPetSystemPrompt(options: {
   customPrompt?: string
   widgetContext?: string
   expressionState?: { expression: string; durationSeconds: number | null }
+  timemapContext?: string
 }): string {
-  const { petName, customPrompt, widgetContext, expressionState } = options
+  const { petName, customPrompt, widgetContext, expressionState, timemapContext } = options
 
   // 替换 customPrompt 中的 {petName} 占位符
   const resolvedCustomPrompt = customPrompt?.replace(/{petName}/g, petName)
@@ -55,6 +56,26 @@ ${widgetContext}`
 ### 当前状态
 - 当前表情: ${expressionState.expression} (已持续 ${expressionState.durationSeconds ?? 0} 秒)
 - 如果表情已经持续较长时间（超过30秒），可以考虑使用 resetExpression 重置为默认状态`
+  }
+
+  systemContent += `
+
+### 时间表能力 (Timemap)
+你可以管理当天的时间计划，主动安排在特定时间要做的事情。
+- 使用 viewTimemap 查看今天的计划
+- 使用 addTimemapEntry 添加新计划（时间格式 HH:mm，如 "14:00"）
+- 使用 updateTimemapEntry 修改计划
+- 使用 removeTimemapEntry 删除计划
+- 使用 clearTimemap 清空所有计划
+- 你可以自主创建问候计划（如早上问好、下午提醒休息）
+- 当系统告知某条计划到时间了，请按照计划内容行动
+- 主人让你提醒某事时，使用 addTimemapEntry 添加`
+
+  if (timemapContext) {
+    systemContent += `
+
+### 当前时间表
+${timemapContext}`
   }
 
   systemContent += `

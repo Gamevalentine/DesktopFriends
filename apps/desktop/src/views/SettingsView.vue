@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useSettings, useServerDiscovery, useP2P, useChatHistory, DEFAULT_PET_PROMPT, PRESET_BACKGROUNDS } from '@desktopfriends/core'
+import { useSettings, useServerDiscovery, useP2P, useChatHistory, DEFAULT_PET_PROMPT, PRESET_BACKGROUNDS, LLMClient } from '@desktopfriends/core'
 import { ModelFormatGuide, ModelUploadResult, type ModelUploadResultInfo } from '@desktopfriends/ui'
 import { useModelUpload } from '../composables/useModelUpload'
 
@@ -150,45 +150,16 @@ const showBaseUrlHint = computed(() => {
 })
 
 const testConnection = async () => {
-  if (!settings.value.llmApiKey) {
-    showMessage('请先输入 API Key', 'error')
-    return
-  }
-
-  if (settings.value.llmProvider === 'custom' && !settings.value.llmBaseUrl) {
-    showMessage('自定义 API 需要填写 API 地址', 'error')
-    return
-  }
-
   showMessage('测试连接中...', 'info')
 
-  try {
-    const config = getLLMConfig()
-    let url = config.baseUrl
-    let headers: Record<string, string> = {}
+  const config = getLLMConfig()
+  const result = await LLMClient.testConnection(config)
 
-    if (config.provider === 'openai' || config.provider === 'deepseek') {
-      url = url || (config.provider === 'openai'
-        ? 'https://api.openai.com/v1/models'
-        : 'https://api.deepseek.com/v1/models')
-      headers = { Authorization: `Bearer ${config.apiKey}` }
-    } else if (config.provider === 'claude') {
-      showMessage('Claude API Key 已保存，发送消息时验证', 'success')
-      return
-    } else if (config.provider === 'custom') {
-      url = config.baseUrl!.replace('/chat/completions', '/models')
-      headers = { Authorization: `Bearer ${config.apiKey}` }
-    }
-
-    const response = await fetch(url!, { headers, method: 'GET' })
-
-    if (response.ok) {
-      showMessage('连接成功！', 'success')
-    } else {
-      showMessage(`连接失败: ${response.status}`, 'error')
-    }
-  } catch (e) {
-    showMessage('连接失败，请检查网络或代理设置', 'error')
+  if (result.success) {
+    const latency = result.latencyMs ? ` (${result.latencyMs}ms)` : ''
+    showMessage(`${result.message}${latency}`, 'success')
+  } else {
+    showMessage(result.message, 'error')
   }
 }
 
