@@ -3,25 +3,18 @@ import cors from '@fastify/cors'
 import { Server } from 'socket.io'
 import { setupSocketHandlers } from './socket.js'
 import { publishService, unpublishService, getLocalIP } from './mdns.js'
-import { createAuthMiddleware, sessionRegistry } from './auth.js'
-import { initDatabase, getDatabase } from './database.js'
 import type { PetInfo, ServerToClientEvents, ClientToServerEvents } from '@desktopfriends/shared'
 
 const DEFAULT_PORT = Number(process.env.PORT) || 3000
-const MAX_PORT_ATTEMPTS = 10  // 最多尝试 10 个端口
+const MAX_PORT_ATTEMPTS = 10
 const HOST = process.env.HOST || '0.0.0.0'
 
-// 创建 Fastify 实例
-const fastify = Fastify({
-  logger: true,
-})
+const fastify = Fastify({ logger: true })
 
-// 注册 CORS
 await fastify.register(cors, {
   origin: true,
 })
 
-// 创建 Socket.io 服务器
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(fastify.server, {
   cors: {
     origin: '*',
@@ -29,32 +22,19 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(fastify.server
   },
 })
 
-// 添加 OpenClaw 认证中间件
-io.use(createAuthMiddleware())
-
-// 存储在线宠物
 const onlinePets = new Map<string, PetInfo>()
-
-// 设置 Socket 处理器
 setupSocketHandlers(io, onlinePets)
 
-// 实际使用的端口
 let actualPort = DEFAULT_PORT
 
-// 数据库清理定时器
-let cleanupInterval: NodeJS.Timeout | null = null
-
-// 健康检查接口
 fastify.get('/health', async () => {
   return { status: 'ok', pets: onlinePets.size }
 })
 
-// 获取在线宠物列表
 fastify.get('/pets', async () => {
   return Array.from(onlinePets.values())
 })
 
-// 获取服务器信息（供移动端发现使用）
 fastify.get('/info', async () => {
   return {
     name: 'DesktopFriends Server',
@@ -65,19 +45,6 @@ fastify.get('/info', async () => {
   }
 })
 
-// OpenClaw 会话状态接口
-fastify.get('/oc/sessions', async () => {
-  const sessions = sessionRegistry.getAllSessions()
-  return {
-    count: sessions.size,
-    sessions: Array.from(sessions.entries()).map(([key, value]) => ({
-      sessionKey: key,
-      ...value
-    }))
-  }
-})
-
-// 尝试在指定端口启动，失败则递增端口
 async function tryListen(port: number, attempts: number = 0): Promise<number> {
   if (attempts >= MAX_PORT_ATTEMPTS) {
     throw new Error(`无法找到可用端口 (尝试了 ${DEFAULT_PORT} - ${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1})`)
@@ -86,8 +53,8 @@ async function tryListen(port: number, attempts: number = 0): Promise<number> {
   try {
     await fastify.listen({ port, host: HOST })
     return port
-  } catch (err: any) {
-    if (err.code === 'EADDRINUSE') {
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && err.code === 'EADDRINUSE') {
       console.log(`⚠️  端口 ${port} 已被占用，尝试端口 ${port + 1}...`)
       return tryListen(port + 1, attempts + 1)
     }
@@ -95,65 +62,25 @@ async function tryListen(port: number, attempts: number = 0): Promise<number> {
   }
 }
 
-// 启动服务器
 const start = async () => {
   try {
-    // 初始化数据库
-    const db = initDatabase()
-    console.log(`💾 Offline message persistence enabled`)
-
-    // 设置定期清理过期消息（每 5 分钟）
-    cleanupInterval = setInterval(() => {
-      db.cleanupExpiredMessages()
-    }, 5 * 60 * 1000)
-
     actualPort = await tryListen(DEFAULT_PORT)
-    console.log(`🚀 OpenClaw LAN Bridge running at http://${HOST}:${actualPort}`)
-    console.log(`📡 Socket.io ready for connections`)
-    console.log(`🔐 OpenClaw authentication enabled`)
-    console.log(`🔍 mDNS service discovery active (_openclaw-bridge._tcp)`)
-
-    // 发布 mDNS 服务 (OpenClaw Bridge 模式)
-    publishService(actualPort, undefined, {
-      serviceType: 'openclaw-bridge',
-      metadata: {
-        version: '1.0.0',
-        protocolVersion: '1.0',
-        capabilities: ['oc:send', 'oc:broadcast', 'oc:heartbeat', 'oc:subscribe', 'offline-queue', 'persistence'],
-      },
-    })
+    console.log(`🚀 DesktopFriends relay server running at http://${HOST}:${actualPort}`)
+    console.log('📡 Socket.io ready for pet connections')
+    publishService(actualPort)
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)
   }
 }
 
-// 优雅关闭
 async function gracefulShutdown(signal: string) {
   console.log(`\n🛑 收到 ${signal}，正在关闭服务...`)
 
   try {
-    // 清理定时器
-    if (cleanupInterval) {
-      clearInterval(cleanupInterval)
-    }
-
-    // 关闭数据库连接
-    try {
-      getDatabase().close()
-    } catch (e) {
-      // 数据库可能未初始化
-    }
-
-    // 取消 mDNS 服务发布
     unpublishService()
-
-    // 关闭所有 Socket 连接
     io.close()
-
-    // 关闭 Fastify 服务器
     await fastify.close()
-
     console.log('✅ 服务已安全关闭')
     process.exit(0)
   } catch (err) {
@@ -165,7 +92,6 @@ async function gracefulShutdown(signal: string) {
 process.on('SIGINT', () => gracefulShutdown('SIGINT'))
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
 
-// 处理未捕获的异常
 process.on('uncaughtException', (err) => {
   console.error('❌ 未捕获的异常:', err)
   gracefulShutdown('uncaughtException')

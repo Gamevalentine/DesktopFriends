@@ -8,7 +8,6 @@ import {
   MdCard,
   MdButton,
   MdSnackbar,
-  XiaoZhiDebugPanel,
   ModelUploadResult,
   type ModelUploadResultInfo,
 } from "@desktopfriends/ui";
@@ -1333,54 +1332,6 @@ const handleClearBackground = () => {
         </Transition>
       </Teleport>
 
-      <!-- 小智调试页面 -->
-      <MdCard
-        title="小智后端 (XiaoZhi)"
-        class="card-animate"
-        style="--delay: 6.5"
-      >
-        <MdSwitch v-model="settings.xiaozhiEnabled" label="启用小智后端" />
-
-        <template v-if="settings.xiaozhiEnabled">
-          <MdInput
-            v-model="settings.xiaozhiOtaUrl"
-            label="OTA 服务器地址"
-            hint="小智后端的 OTA 地址"
-          />
-          <MdInput
-            v-model="settings.xiaozhiDeviceMac"
-            label="设备 MAC 地址 (可选)"
-            hint="留空将自动生成随机 MAC"
-          />
-          <MdInput
-            v-model="settings.xiaozhiDeviceName"
-            label="设备名称 (可选)"
-            hint="留空使用宠物名称"
-          />
-          <MdSwitch
-            v-model="settings.xiaozhiAutoPlayAudio"
-            label="自动播放语音"
-          />
-
-          <div class="xiaozhi-hint">
-            <p>启用后将使用小智后端进行对话，支持语音合成。</p>
-            <p>首次连接可能需要在小智后台输入验证码绑定设备。</p>
-          </div>
-        </template>
-      </MdCard>
-
-      <!-- 小智调试面板 (仅在启用时显示) -->
-      <XiaoZhiDebugPanel
-        v-if="settings.xiaozhiEnabled"
-        :initialConfig="{
-          otaUrl: settings.xiaozhiOtaUrl,
-          deviceMac: settings.xiaozhiDeviceMac,
-          deviceName: settings.xiaozhiDeviceName || currentPet.name,
-          autoPlayAudio: settings.xiaozhiAutoPlayAudio,
-        }"
-        showAdvanced
-      />
-
       <!-- 操作按钮 -->
       <div class="actions card-animate" style="--delay: 7">
         <MdButton @click="handleReset"> 重置所有设置 </MdButton>
@@ -2488,23 +2439,4 @@ const handleClearBackground = () => {
   color: #ef5350;
 }
 
-/* XiaoZhi 提示样式 */
-.xiaozhi-hint {
-  margin-top: 12px;
-  padding: 12px;
-  background: rgba(255, 152, 0, 0.1);
-  border-radius: 8px;
-  border: 1px solid rgba(255, 152, 0, 0.2);
-}
-
-.xiaozhi-hint p {
-  margin: 0;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.7);
-  line-height: 1.5;
-}
-
-.xiaozhi-hint p + p {
-  margin-top: 4px;
-}
 </style>

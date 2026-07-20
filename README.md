@@ -49,7 +49,7 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 - **On-time Execution** — When a scheduled entry is due, the heartbeat triggers the agent to act (streaming response displayed as a chat bubble)
 - **User Reminders** — Users can say "remind me to drink water at 3pm" and the agent creates a timemap entry
 - **Persistent & Cross-day** — Stored in localStorage; `daily` entries carry over across days, `once` entries auto-expire
-- **Different from OpenClaw cron** — OpenClaw's heartbeat is a server-side keep-alive mechanism; Timemap is a client-side, agent-managed semantic schedule where the AI decides *what* to do and *when*
+- **More than a fixed timer** — Timemap is a client-side, agent-managed semantic schedule where the AI decides *what* to do and *when*
 
 ### Live2D & Interaction
 - **Live2D Rendering** — Smooth Live2D model display with motion and expression switching
@@ -72,9 +72,6 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 ### Mobile-only (Android)
 - **Keyboard Handling** — Smart input positioning to avoid keyboard occlusion
 - **Orientation Support** — Portrait and landscape modes with automatic Live2D repositioning
-
-### Hardware Integration
-- **XiaoZhi Device Support** — Integration with XiaoZhi hardware (Opus codec, OTA updates)
 
 ## Tech Stack
 
@@ -319,7 +316,6 @@ Then in Android Studio: Build > Build Bundle(s) / APK(s) > Build APK(s).
 - [x] Chat history storage and export (JSON / text)
 - [x] Custom backgrounds (image upload / preset gradients)
 - [x] Material Design UI component library
-- [x] XiaoZhi hardware integration (Opus codec, OTA)
 
 ### In Progress
 

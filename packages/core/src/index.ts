@@ -10,16 +10,6 @@ export {
 export { useChatHistory } from './composables/useChatHistory'
 export { useServerDiscovery } from './composables/useServerDiscovery'
 export { useWebSocket } from './composables/useWebSocket'
-export { useXiaoZhi } from './composables/useXiaoZhi'
-
-// Opus 编解码工具导出
-export {
-  XiaoZhiOpusDecoder,
-  XiaoZhiOpusEncoder,
-  createXiaoZhiDecoder,
-  createXiaoZhiEncoder,
-  XIAOZHI_AUDIO_CONFIG,
-} from './utils/opusCodec'
 
 // 天气 API 工具导出
 export {
@@ -36,16 +26,6 @@ export type { WebSocketOptions, WebSocketMessage, WebSocketStatus } from './comp
 export type { ChatResponse } from './composables/useChat'
 export type { ToolCall } from './composables/useLive2DTools'
 export type { DiscoveredServer } from './composables/useServerDiscovery'
-export type {
-  XiaoZhiConfig,
-  XiaoZhiOtaResponse,
-  XiaoZhiConnectResult,
-  XiaoZhiMessage,
-  XiaoZhiStatus,
-  MCPPayload,
-  MCPTool,
-  TTSState,
-} from './composables/useXiaoZhi'
 
 // 共享类型重新导出
 export type {
