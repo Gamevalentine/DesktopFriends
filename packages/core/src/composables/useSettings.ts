@@ -45,12 +45,6 @@ export interface AppSettings {
   backgroundImage: string     // 自定义图片 (base64 或 URL)
   backgroundPreset: string    // 预设背景名称
 
-  // XiaoZhi 设置
-  xiaozhiEnabled: boolean         // 是否启用小智后端
-  xiaozhiOtaUrl: string           // OTA 服务器地址
-  xiaozhiDeviceMac: string        // 设备 MAC 地址
-  xiaozhiDeviceName: string       // 设备名称
-  xiaozhiAutoPlayAudio: boolean   // 是否自动播放音频
 }
 
 // 默认人设提示词
@@ -137,12 +131,6 @@ const migrateOldSettings = (stored: any): AppSettings | null => {
       backgroundGradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       backgroundImage: '',
       backgroundPreset: '',
-      // XiaoZhi 设置（旧版没有，使用默认值）
-      xiaozhiEnabled: false,
-      xiaozhiOtaUrl: 'http://118.89.81.22:8002/xiaozhi/ota/',
-      xiaozhiDeviceMac: '',
-      xiaozhiDeviceName: 'TableFri',
-      xiaozhiAutoPlayAudio: true,
     }
   }
 
@@ -172,12 +160,6 @@ const defaultSettings: AppSettings = {
   backgroundImage: '',
   backgroundPreset: '',
 
-  // XiaoZhi 默认设置
-  xiaozhiEnabled: false,
-  xiaozhiOtaUrl: 'http://118.89.81.22:8002/xiaozhi/ota/',
-  xiaozhiDeviceMac: '',
-  xiaozhiDeviceName: 'TableFri',
-  xiaozhiAutoPlayAudio: true,
 }
 
 // 预设背景列表
