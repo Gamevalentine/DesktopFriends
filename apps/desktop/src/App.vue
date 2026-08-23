@@ -4,34 +4,65 @@ import {
   Live2DCanvas,
   ChatInput,
   ChatBubble,
-  ChatHistory,
 } from "@desktopfriends/ui";
 import {
   useSettings,
   useLangChainAgent,
   useChatHistory,
   useP2P,
+  useWidgets,
   createPluginTools,
 } from "@desktopfriends/core";
 import type { PluginManifest } from "@desktopfriends/core";
 import { isDesktopPlatform } from "@desktopfriends/platform";
-import type { PetMessage, PetInfo } from "@desktopfriends/shared";
+import type { PetMessage, PetInfo, WidgetType } from "@desktopfriends/shared";
 import { appWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/tauri";
 import { readDir, readTextFile } from "@tauri-apps/api/fs";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import WindowControls from "./components/WindowControls.vue";
 import SettingsView from "./views/SettingsView.vue";
+import {
+  openChatHistoryWindow,
+  openWidgetWindow,
+} from "./windowManager";
 
 const { currentPet, backgroundStyle, settings, live2dTransform } =
   useSettings();
 const {
-  chatHistory,
   addUserMessage,
   addPetMessage,
   addOtherPetMessage,
   addThinkingMessage,
 } = useChatHistory();
+const {
+  widgets,
+  todos,
+  addWidget,
+  toggleWidget,
+  addTodo,
+  toggleTodo,
+  getWidgetContexts,
+} = useWidgets();
+
+const widgetAgentContext = {
+  getTodos: () => todos.value,
+  addTodo: (text: string) => addTodo(text),
+  completeTodo: (id: string) => {
+    const todo = todos.value.find((item) => item.id === id);
+    if (!todo) return false;
+    if (!todo.completed) toggleTodo(id);
+    return true;
+  },
+  getWidgetContexts: () => getWidgetContexts(),
+};
+
+const enabledWidgetToolSignature = computed(() => {
+  const types = widgets.value
+    .filter((item) => item.enabled)
+    .map((item) => item.type);
+  return [...new Set(types)].sort().join("|");
+});
 
 const live2dRef = ref<InstanceType<typeof Live2DCanvas> | null>(null);
 
@@ -47,6 +78,9 @@ const isLocked = ref(false); // 锁定模式，始终显示 UI 且禁用穿透
 
 // 鼠标位置检测定时器
 let mouseCheckInterval: ReturnType<typeof setInterval> | null = null;
+let hoverHideTimer: ReturnType<typeof setTimeout> | null = null;
+let isCheckingMousePosition = false;
+const HOVER_HIDE_DELAY = 350;
 
 // 鼠标位置响应类型
 interface CursorPosition {
@@ -55,40 +89,89 @@ interface CursorPosition {
   in_window: boolean;
 }
 
+interface ModelBounds {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+}
+
+const modelBounds = ref<ModelBounds | null>(null);
+
+const cancelHoverHide = () => {
+  if (hoverHideTimer) {
+    clearTimeout(hoverHideTimer);
+    hoverHideTimer = null;
+  }
+};
+
+const hideHoverUI = async () => {
+  hoverHideTimer = null;
+  if (isLocked.value) return;
+
+  isHoveringLive2D.value = false;
+  showTestPanel.value = false;
+  showAdjustPanel.value = false;
+  showPetsPanel.value = false;
+  showWidgetPanel.value = false;
+
+  try {
+    await appWindow.setIgnoreCursorEvents(true);
+  } catch (e) {
+    console.error("Failed to restore cursor passthrough:", e);
+  }
+};
+
+const scheduleHoverHide = () => {
+  if (hoverHideTimer || !isHoveringLive2D.value || isLocked.value) return;
+  hoverHideTimer = setTimeout(hideHoverUI, HOVER_HIDE_DELAY);
+};
+
+const isPointInHoverUI = (cursor: CursorPosition) =>
+  document
+    .elementsFromPoint(cursor.x, cursor.y)
+    .some((element) => element.closest("[data-hover-ui]"));
+
 // 启动鼠标位置检测（用于点击穿透模式下检测鼠标是否在 Live2D 区域）
 const startMousePositionCheck = () => {
   if (mouseCheckInterval || !isDesktop.value) return;
 
   mouseCheckInterval = setInterval(async () => {
-    if (isLocked.value) return; // 锁定模式下不需要检测
+    if (isCheckingMousePosition) return;
+    isCheckingMousePosition = true;
 
     try {
+      const bounds = live2dRef.value?.getModelBounds() as
+        | ModelBounds
+        | null
+        | undefined;
+      if (bounds) modelBounds.value = bounds;
+
+      // 锁定时仍更新工具栏位置，但不切换点击穿透。
+      if (isLocked.value) {
+        cancelHoverHide();
+        return;
+      }
+
       // 调用 Rust 命令获取鼠标位置
       const cursor = await invoke<CursorPosition>("get_cursor_position");
 
-      // 如果鼠标不在窗口内，启用穿透并隐藏 UI
+      // 留出短暂缓冲，避免从模型移向工具栏时 UI 闪烁。
       if (!cursor.in_window) {
-        if (isHoveringLive2D.value) {
-          isHoveringLive2D.value = false;
-          await appWindow.setIgnoreCursorEvents(true);
-        }
+        scheduleHoverHide();
         return;
       }
-
-      // 鼠标在窗口内
-      // 如果已经激活了 UI（之前进入过模型区域），保持显示状态
-      if (isHoveringLive2D.value) {
-        return;
-      }
-
-      // 从 Live2D 组件获取模型的实际边界
-      const bounds = live2dRef.value?.getModelBounds();
 
       // 如果模型没有加载或加载失败，检查是否需要激活备用交互区域
       if (!bounds) {
         // 检查模型是否处于加载失败状态（有错误）
         const hasError = live2dRef.value?.error;
         if (hasError) {
+          cancelHoverHide();
           // 模型加载失败，激活 UI 让用户能进入设置
           if (!isHoveringLive2D.value) {
             isHoveringLive2D.value = true;
@@ -99,20 +182,32 @@ const startMousePositionCheck = () => {
       }
       // console.log("Cursor position:", cursor, "Model bounds:", bounds);
 
-      // 判断鼠标是否在 Live2D 模型区域内
-      const isInLive2DArea =
+      // 先用边界框快速排除，再读取当前像素的 alpha。
+      const isInModelBounds =
         cursor.x >= bounds.left &&
         cursor.x <= bounds.right &&
         cursor.y >= bounds.top &&
         cursor.y <= bounds.bottom;
+      const isOnVisibleModel =
+        isInModelBounds &&
+        Boolean(live2dRef.value?.isPointOnModel(cursor.x, cursor.y));
 
-      // 只有进入模型区域时才激活 UI，不会因为离开模型而关闭
-      if (isInLive2DArea && !isHoveringLive2D.value) {
-        isHoveringLive2D.value = true;
-        await appWindow.setIgnoreCursorEvents(false);
+      const isInVisibleUI =
+        isHoveringLive2D.value && isPointInHoverUI(cursor);
+
+      if (isOnVisibleModel || isInVisibleUI) {
+        cancelHoverHide();
+        if (!isHoveringLive2D.value) {
+          isHoveringLive2D.value = true;
+          await appWindow.setIgnoreCursorEvents(false);
+        }
+      } else {
+        scheduleHoverHide();
       }
     } catch (e) {
       // 静默处理错误，避免日志刷屏
+    } finally {
+      isCheckingMousePosition = false;
     }
   }, 50); // 每 50ms 检查一次
 };
@@ -141,11 +236,13 @@ const onLive2DLeave = async () => {
   showTestPanel.value = false;
   showAdjustPanel.value = false;
   showPetsPanel.value = false;
+  showWidgetPanel.value = false;
 };
 
 // 切换锁定模式（始终显示 UI 且禁用穿透）
 const toggleLocked = async () => {
   isLocked.value = !isLocked.value;
+  if (isLocked.value) cancelHoverHide();
   if (isDesktop.value) {
     try {
       // 锁定时禁用穿透，解锁且不在 Live2D 上时启用穿透
@@ -161,10 +258,38 @@ const toggleLocked = async () => {
 // 是否显示悬停 UI
 const showHoverUI = computed(() => isHoveringLive2D.value || isLocked.value);
 
+const toolbarPosition = computed(() => {
+  const bounds = modelBounds.value;
+  const fallbackX = window.innerWidth / 2;
+  if (!bounds) return { x: fallbackX, y: 44 };
+
+  const toolbarHalfWidth = 140;
+  const x = Math.min(
+    Math.max(bounds.centerX, toolbarHalfWidth + 8),
+    window.innerWidth - toolbarHalfWidth - 8,
+  );
+  const y = Math.max(44, bounds.top - 50);
+  return { x, y };
+});
+
+const hoverToolbarStyle = computed(() => ({
+  left: `${toolbarPosition.value.x}px`,
+  top: `${toolbarPosition.value.y}px`,
+}));
+
+const hoverPanelStyle = computed(() => ({
+  left: `${Math.min(
+    Math.max(toolbarPosition.value.x, 146),
+    window.innerWidth - 146,
+  )}px`,
+  top: `${Math.min(toolbarPosition.value.y + 52, window.innerHeight - 220)}px`,
+}));
+
 // 面板显示状态
 const showTestPanel = ref(false);
 const showAdjustPanel = ref(false);
 const showPetsPanel = ref(false);
+const showWidgetPanel = ref(false);
 
 // 获取模型可用的动作和表情
 const motionDetails = computed(() => live2dRef.value?.motionDetails || []);
@@ -251,6 +376,11 @@ const agent = useLangChainAgent({
     // 显示内心独白气泡
     showBubble(thought, currentPet.value.name, true);
   },
+  widgetContext: widgetAgentContext,
+});
+
+watch(enabledWidgetToolSignature, () => {
+  void agent.setWidgetContext(widgetAgentContext);
 });
 
 // 当前显示的气泡消息
@@ -387,6 +517,7 @@ const toggleTestPanel = () => {
   if (showTestPanel.value) {
     showAdjustPanel.value = false;
     showPetsPanel.value = false;
+    showWidgetPanel.value = false;
   }
 };
 
@@ -395,6 +526,7 @@ const toggleAdjustPanel = () => {
   if (showAdjustPanel.value) {
     showTestPanel.value = false;
     showPetsPanel.value = false;
+    showWidgetPanel.value = false;
   }
 };
 
@@ -403,6 +535,41 @@ const togglePetsPanel = () => {
   if (showPetsPanel.value) {
     showTestPanel.value = false;
     showAdjustPanel.value = false;
+    showWidgetPanel.value = false;
+  }
+};
+
+const toggleWidgetPanel = () => {
+  showWidgetPanel.value = !showWidgetPanel.value;
+  if (showWidgetPanel.value) {
+    showTestPanel.value = false;
+    showAdjustPanel.value = false;
+    showPetsPanel.value = false;
+  }
+};
+
+const openHistoryWindow = async () => {
+  try {
+    await openChatHistoryWindow();
+  } catch (error) {
+    console.error("Failed to open chat history window:", error);
+  }
+};
+
+const launchWidget = async (type: Exclude<WidgetType, "photo">) => {
+  let widget = widgets.value.find((item) => item.type === type);
+  if (!widget) widget = addWidget(type) || undefined;
+  if (!widget) {
+    console.error(`Failed to create ${type} widget`);
+    return;
+  }
+  if (!widget.enabled) toggleWidget(widget.id);
+
+  showWidgetPanel.value = false;
+  try {
+    await openWidgetWindow(type, widget.id);
+  } catch (error) {
+    console.error(`Failed to open ${type} widget window:`, error);
   }
 };
 
@@ -411,6 +578,7 @@ const openSettings = async () => {
   showTestPanel.value = false;
   showAdjustPanel.value = false;
   showPetsPanel.value = false;
+  showWidgetPanel.value = false;
   currentView.value = "settings";
 
   // 桌面端：进入设置页时停止鼠标检测并禁用点击穿透
@@ -596,6 +764,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopMousePositionCheck();
+  cancelHoverHide();
 });
 </script>
 
@@ -606,6 +775,7 @@ onUnmounted(() => {
       <WindowControls
         v-if="isDesktop && currentView !== 'settings'"
         v-show="showHoverUI"
+        data-hover-ui
         :is-locked="isLocked"
         @toggle-lock="toggleLocked"
       />
@@ -616,9 +786,20 @@ onUnmounted(() => {
 
     <!-- 主页内容 -->
     <template v-else>
+      <div
+        v-show="showHoverUI"
+        class="pet-toolbar"
+        data-hover-ui
+        :style="hoverToolbarStyle"
+      >
       <!-- 设置按钮 -->
       <Transition name="fade">
-        <button v-show="showHoverUI" class="settings-btn" @click="openSettings">
+        <button
+          v-show="showHoverUI"
+          class="settings-btn"
+          title="设置"
+          @click="openSettings"
+        >
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path
               d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"
@@ -632,6 +813,7 @@ onUnmounted(() => {
         <button
           v-show="showHoverUI"
           class="adjust-btn"
+          title="调整模型"
           @click="toggleAdjustPanel"
         >
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -644,7 +826,12 @@ onUnmounted(() => {
 
       <!-- 测试按钮 -->
       <Transition name="fade">
-        <button v-show="showHoverUI" class="test-btn" @click="toggleTestPanel">
+        <button
+          v-show="showHoverUI"
+          class="test-btn"
+          title="测试动作"
+          @click="toggleTestPanel"
+        >
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path
               d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7zM7 9H4V5h3v4zm10 6h3v4h-3v-4zm0-10v4h3V5h-3z"
@@ -658,6 +845,7 @@ onUnmounted(() => {
         <button
           v-show="showHoverUI"
           class="pets-btn"
+          title="在线宠物"
           @click="togglePetsPanel"
           :class="{ connected: isConnected }"
         >
@@ -672,9 +860,43 @@ onUnmounted(() => {
         </button>
       </Transition>
 
+      <!-- 独立对话记录窗口 -->
+      <Transition name="fade">
+        <button
+          v-show="showHoverUI"
+          class="history-btn"
+          title="打开对话记录窗口"
+          @click="openHistoryWindow"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M4 4h16v12H6.34L4 18.34V4zm2 2v7.52L7.52 12H18V6H6zm2 2h8v2H8V8z" />
+          </svg>
+        </button>
+      </Transition>
+
+      <!-- 桌面小组件 -->
+      <Transition name="fade">
+        <button
+          v-show="showHoverUI"
+          class="widgets-btn"
+          title="桌面小组件"
+          @click="toggleWidgetPanel"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v5h-8V3zm2 2v1h4V5h-4zm-2 5h8v11h-8V10zm2 2v7h4v-7h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5z" />
+          </svg>
+        </button>
+      </Transition>
+      </div>
+
       <!-- 测试面板 -->
       <Transition name="panel">
-        <div v-if="showTestPanel" class="test-panel">
+        <div
+          v-if="showTestPanel"
+          class="test-panel"
+          data-hover-ui
+          :style="hoverPanelStyle"
+        >
           <div class="panel-title">动作测试</div>
 
           <template v-if="Object.keys(motionsByGroup).length > 0">
@@ -726,7 +948,12 @@ onUnmounted(() => {
 
       <!-- 调整面板 -->
       <Transition name="panel">
-        <div v-if="showAdjustPanel" class="adjust-panel">
+        <div
+          v-if="showAdjustPanel"
+          class="adjust-panel"
+          data-hover-ui
+          :style="hoverPanelStyle"
+        >
           <div class="panel-title">Live2D 调整</div>
 
           <div class="slider-group">
@@ -782,7 +1009,12 @@ onUnmounted(() => {
 
       <!-- 在线宠物面板 -->
       <Transition name="panel">
-        <div v-if="showPetsPanel" class="pets-panel">
+        <div
+          v-if="showPetsPanel"
+          class="pets-panel"
+          data-hover-ui
+          :style="hoverPanelStyle"
+        >
           <div class="panel-title">
             在线宠物
             <span class="connection-status" :class="{ connected: isConnected }">
@@ -845,6 +1077,29 @@ onUnmounted(() => {
         </div>
       </Transition>
 
+      <Transition name="panel">
+        <div
+          v-if="showWidgetPanel"
+          class="widget-launcher-panel"
+          data-hover-ui
+          :style="hoverPanelStyle"
+        >
+          <div class="panel-title">桌面小组件</div>
+          <button class="widget-launcher-item" @click="launchWidget('clock')">
+            <span>🕐</span>
+            <div><strong>时钟</strong><small>时间、日期和显示格式</small></div>
+          </button>
+          <button class="widget-launcher-item" @click="launchWidget('weather')">
+            <span>🌤️</span>
+            <div><strong>天气</strong><small>城市实时天气</small></div>
+          </button>
+          <button class="widget-launcher-item" @click="launchWidget('todo')">
+            <span>📝</span>
+            <div><strong>待办</strong><small>与 Agent 共享待办数据</small></div>
+          </button>
+        </div>
+      </Transition>
+
       <!-- Live2D 画布 -->
       <div
         class="live2d-area"
@@ -878,18 +1133,9 @@ onUnmounted(() => {
         <span v-if="isConnected" class="p2p-status">P2P</span>
       </div>
 
-      <!-- 聊天历史记录 -->
-      <Transition name="fade">
-        <ChatHistory
-          v-show="showHoverUI"
-          :messages="chatHistory"
-          :pet-name="currentPet.name"
-        />
-      </Transition>
-
       <!-- 输入框 -->
       <Transition name="fade">
-        <div v-show="showHoverUI" class="input-area">
+        <div v-show="showHoverUI" class="input-area" data-hover-ui>
           <ChatInput
             @send="handleSend"
             :disabled="agent.isLoading.value"
@@ -918,11 +1164,28 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+.pet-toolbar {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 24px;
+  background: rgba(20, 20, 24, 0.38);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+  z-index: 30;
+}
+
 /* 功能按钮基础样式 */
 .settings-btn,
 .adjust-btn,
 .test-btn,
-.pets-btn {
+.pets-btn,
+.history-btn,
+.widgets-btn {
   position: absolute;
   width: 36px;
   height: 36px;
@@ -938,51 +1201,48 @@ onUnmounted(() => {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.pet-toolbar .settings-btn,
+.pet-toolbar .adjust-btn,
+.pet-toolbar .test-btn,
+.pet-toolbar .pets-btn,
+.pet-toolbar .history-btn,
+.pet-toolbar .widgets-btn {
+  position: relative;
+  inset: auto;
+  flex: 0 0 auto;
+}
+
 .settings-btn:hover,
 .adjust-btn:hover,
 .test-btn:hover,
-.pets-btn:hover {
+.pets-btn:hover,
+.history-btn:hover,
+.widgets-btn:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
 .settings-btn:active,
 .adjust-btn:active,
 .test-btn:active,
-.pets-btn:active {
+.pets-btn:active,
+.history-btn:active,
+.widgets-btn:active {
   transform: scale(0.95);
 }
 
 .settings-btn svg,
 .adjust-btn svg,
 .test-btn svg,
-.pets-btn svg {
+.pets-btn svg,
+.history-btn svg,
+.widgets-btn svg {
   width: 20px;
   height: 20px;
   color: white;
 }
 
-.settings-btn {
-  top: 44px;
-  right: 12px;
-}
-
 .settings-btn:hover {
   transform: rotate(30deg);
-}
-
-.adjust-btn {
-  top: 44px;
-  right: 56px;
-}
-
-.test-btn {
-  top: 44px;
-  left: 12px;
-}
-
-.pets-btn {
-  top: 44px;
-  left: 56px;
 }
 
 .pets-btn.connected {
@@ -1012,9 +1272,11 @@ onUnmounted(() => {
 /* 面板样式 */
 .test-panel,
 .adjust-panel,
-.pets-panel {
+.pets-panel,
+.widget-launcher-panel {
   position: absolute;
-  top: 88px;
+  right: auto;
+  transform: translateX(-50%);
   background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(10px);
   border-radius: 12px;
@@ -1027,13 +1289,43 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.test-panel,
-.pets-panel {
-  left: 12px;
+.widget-launcher-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
 
-.adjust-panel {
-  right: 12px;
+.widget-launcher-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  border-radius: 9px;
+  padding: 9px;
+  color: #333;
+  background: #f5f6fa;
+  text-align: left;
+  cursor: pointer;
+}
+
+.widget-launcher-item:hover {
+  background: #e9ebf5;
+}
+
+.widget-launcher-item > span {
+  font-size: 22px;
+}
+
+.widget-launcher-item div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.widget-launcher-item small {
+  color: #858995;
+  font-size: 10px;
 }
 
 .panel-title {
@@ -1392,7 +1684,7 @@ onUnmounted(() => {
 .panel-enter-from,
 .panel-leave-to {
   opacity: 0;
-  transform: translateY(-10px) scale(0.95);
+  transform: translateX(-50%) translateY(-10px) scale(0.95);
 }
 
 /* 气泡动画 */

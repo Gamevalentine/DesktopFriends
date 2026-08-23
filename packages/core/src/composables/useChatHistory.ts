@@ -1,12 +1,81 @@
 /**
  * 聊天历史记录管理
  */
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { ChatMessage } from '../types'
 
 // 全局单例
 const chatHistory = ref<ChatMessage[]>([])
 const maxHistoryLength = ref(100) // 最大保存条数
+const HISTORY_STORAGE_KEY = 'desktopfriends-chat-history'
+const HISTORY_CHANNEL_NAME = 'desktopfriends-chat-history-sync'
+
+let historyInitialized = false
+let historyChannel: BroadcastChannel | null = null
+let applyingRemoteHistory = false
+
+const isChatMessage = (value: unknown): value is ChatMessage => {
+  if (!value || typeof value !== 'object') return false
+  const message = value as Partial<ChatMessage>
+  return (
+    typeof message.id === 'string' &&
+    typeof message.name === 'string' &&
+    typeof message.content === 'string' &&
+    typeof message.timestamp === 'number' &&
+    ['user', 'pet', 'other', 'thinking'].includes(message.speaker || '')
+  )
+}
+
+const applyHistorySnapshot = (snapshot: unknown) => {
+  if (!Array.isArray(snapshot)) return
+  applyingRemoteHistory = true
+  chatHistory.value = snapshot
+    .filter(isChatMessage)
+    .slice(-maxHistoryLength.value)
+  applyingRemoteHistory = false
+}
+
+const initializeHistorySync = () => {
+  if (historyInitialized || typeof window === 'undefined') return
+  historyInitialized = true
+
+  try {
+    const stored = localStorage.getItem(HISTORY_STORAGE_KEY)
+    if (stored) applyHistorySnapshot(JSON.parse(stored))
+  } catch (error) {
+    console.warn('Failed to load chat history:', error)
+  }
+
+  if (typeof BroadcastChannel !== 'undefined') {
+    historyChannel = new BroadcastChannel(HISTORY_CHANNEL_NAME)
+    historyChannel.onmessage = (event) => applyHistorySnapshot(event.data)
+  }
+
+  window.addEventListener('storage', (event) => {
+    if (event.key !== HISTORY_STORAGE_KEY || !event.newValue) return
+    try {
+      applyHistorySnapshot(JSON.parse(event.newValue))
+    } catch {
+      // Ignore invalid snapshots from older versions.
+    }
+  })
+
+  watch(
+    chatHistory,
+    (messages) => {
+      if (applyingRemoteHistory) return
+      const snapshot = messages.slice(-maxHistoryLength.value)
+      try {
+        const serialized = JSON.stringify(snapshot)
+        localStorage.setItem(HISTORY_STORAGE_KEY, serialized)
+        historyChannel?.postMessage(JSON.parse(serialized))
+      } catch (error) {
+        console.warn('Failed to save chat history:', error)
+      }
+    },
+    { deep: true, flush: 'sync' },
+  )
+}
 
 // 生成唯一 ID
 const generateId = () => {
@@ -14,6 +83,8 @@ const generateId = () => {
 }
 
 export function useChatHistory() {
+  initializeHistorySync()
+
   // 添加消息
   const addMessage = (
     speaker: 'user' | 'pet' | 'other' | 'thinking',

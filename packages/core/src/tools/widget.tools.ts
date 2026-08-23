@@ -2,7 +2,7 @@
  * @Description 小组件工具定义
  * 使用 @langchain/core 的 tool() 函数（浏览器兼容）
  */
-import { tool } from '@langchain/core/tools'
+import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { z } from 'zod'
 import type { TodoItem, WidgetContext } from '@desktopfriends/shared'
 
@@ -15,6 +15,9 @@ export function createWidgetTools(context: {
   completeTodo: (id: string) => boolean
   getWidgetContexts: () => WidgetContext[]
 }) {
+  const enabledTypes = new Set(context.getWidgetContexts().map(item => item.type))
+  const tools: StructuredToolInterface[] = []
+
   const getCurrentTimeTool = tool(
     async () => {
       const now = new Date()
@@ -105,11 +108,26 @@ export function createWidgetTools(context: {
     }
   )
 
-  return [
-    getCurrentTimeTool,
-    getTodosTool,
-    addTodoTool,
-    completeTodoTool,
-    getWidgetContextTool
-  ]
+  const getWeatherTool = tool(
+    async () => {
+      const weatherContexts = context
+        .getWidgetContexts()
+        .filter(item => item.type === 'weather')
+      return JSON.stringify(weatherContexts)
+    },
+    {
+      name: 'getWeather',
+      description: '获取天气小组件中的当前城市、天气、温度、湿度和风速',
+      schema: z.object({})
+    }
+  )
+
+  if (enabledTypes.has('clock')) tools.push(getCurrentTimeTool)
+  if (enabledTypes.has('todo')) {
+    tools.push(getTodosTool, addTodoTool, completeTodoTool)
+  }
+  if (enabledTypes.has('weather')) tools.push(getWeatherTool)
+  if (enabledTypes.size > 0) tools.push(getWidgetContextTool)
+
+  return tools
 }

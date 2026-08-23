@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'DesktopFriends',
-  description: '可爱的 Live2D 桌面宠物，支持 AI 对话和多设备联动',
+  description: '拥有时间感知的 Live2D AI 桌面伙伴，支持主动计划、提醒与多设备联动',
   lang: 'zh-CN',
   base: '/DesktopFriends/',
 
@@ -11,7 +11,7 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#667eea' }],
     ['meta', { name: 'og:type', content: 'website' }],
     ['meta', { name: 'og:title', content: 'DesktopFriends - 桌面宠物' }],
-    ['meta', { name: 'og:description', content: '将旧手机变成可爱的 Live2D 桌面宠物' }],
+    ['meta', { name: 'og:description', content: '通过时间表与本地心跳，让 Live2D 宠物主动计划、提醒与陪伴' }],
   ],
 
   themeConfig: {
@@ -25,7 +25,7 @@ export default defineConfig({
         text: '更多',
         items: [
           { text: '更新日志', link: '/changelog' },
-          { text: 'GitHub', link: 'https://github.com/user/DesktopFriends' }
+          { text: 'GitHub', link: 'https://github.com/Tosuke-sama/DesktopFriends' }
         ]
       }
     ],
@@ -60,7 +60,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/user/DesktopFriends' }
+      { icon: 'github', link: 'https://github.com/Tosuke-sama/DesktopFriends' }
     ],
 
     footer: {

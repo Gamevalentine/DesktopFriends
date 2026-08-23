@@ -39,8 +39,35 @@ const { chatHistory, addUserMessage, addPetMessage, addOtherPetMessage, addThink
 const { keyboardHeight } = useKeyboard();
 
 // 小组件系统
-const { editMode, addWidget, todos, addTodo, toggleTodo, getWidgetContexts } = useWidgets();
+const {
+  widgets,
+  editMode,
+  addWidget,
+  todos,
+  addTodo,
+  toggleTodo,
+  getWidgetContexts,
+} = useWidgets();
 const showAddWidgetDialog = ref(false);
+
+const widgetAgentContext = {
+  getTodos: () => todos.value,
+  addTodo: (text: string) => addTodo(text),
+  completeTodo: (id: string) => {
+    const todo = todos.value.find((item) => item.id === id);
+    if (!todo) return false;
+    if (!todo.completed) toggleTodo(id);
+    return true;
+  },
+  getWidgetContexts: () => getWidgetContexts(),
+};
+
+const enabledWidgetToolSignature = computed(() => {
+  const types = widgets.value
+    .filter((item) => item.enabled)
+    .map((item) => item.type);
+  return [...new Set(types)].sort().join("|");
+});
 
 // 小组件事件
 const { subscribe: subscribeWidgetEvent } = useWidgetEvents();
@@ -258,16 +285,12 @@ const agent = useLangChainAgent({
     isShowingThinking.value = true;
     currentMessage.value = thought;
   },
-  widgetContext: {
-    getTodos: () => todos.value,
-    addTodo: (text: string) => addTodo(text),
-    completeTodo: (id: string) => {
-      toggleTodo(id);
-      return true;
-    },
-    getWidgetContexts: () => getWidgetContexts(),
-  },
+  widgetContext: widgetAgentContext,
   timemapContext: timemap.toToolContext(),
+});
+
+watch(enabledWidgetToolSignature, () => {
+  void agent.setWidgetContext(widgetAgentContext);
 });
 
 // 监听 Live2D 模型动作/表情变化，自动更新 agent 工具

@@ -42,7 +42,12 @@ const close = async () => {
         class="control-btn lock"
         :class="{ active: isLocked }"
         @click="emit('toggle-lock')"
-        title="锁定交互"
+        :title="
+          isLocked
+            ? '关闭交互锁定（恢复点击穿透）'
+            : '开启交互锁定（常显菜单，禁用点击穿透）'
+        "
+        :aria-label="isLocked ? '关闭交互锁定' : '开启交互锁定'"
       >
         {{ isLocked ? "🔒" : "🔓" }}
       </button>
@@ -50,7 +55,8 @@ const close = async () => {
         class="control-btn pin"
         :class="{ active: isAlwaysOnTop }"
         @click="toggleAlwaysOnTop"
-        title="置顶"
+        :title="isAlwaysOnTop ? '取消窗口置顶' : '保持窗口置顶'"
+        :aria-label="isAlwaysOnTop ? '取消窗口置顶' : '保持窗口置顶'"
       >
         📌
       </button>

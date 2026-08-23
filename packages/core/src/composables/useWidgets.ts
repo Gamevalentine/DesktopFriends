@@ -9,8 +9,10 @@ import type {
   WidgetContext,
   GridConfig,
   WidgetSettings,
+  WeatherWidgetSettings,
   TodoItem,
   WidgetSizeConstraints,
+  StandardWeatherData,
 } from '@desktopfriends/shared'
 import {
   defaultClockSettings,
@@ -23,6 +25,14 @@ import {
 
 const STORAGE_KEY = 'desktop-pet-widgets'
 const TODO_STORAGE_KEY = 'desktop-pet-todos'
+const WEATHER_STORAGE_KEY = 'desktop-pet-widget-weather'
+const WIDGET_CHANNEL_NAME = 'desktopfriends-widget-sync'
+
+interface WidgetWeatherState {
+  location: string
+  data: StandardWeatherData
+  updatedAt: number
+}
 
 // Grid configuration
 const GRID_COLUMNS = 6
@@ -33,8 +43,12 @@ const GRID_GAP = 8  // Gap between grid cells
 // Singleton state
 const widgets = ref<WidgetConfig[]>([])
 const todos = ref<TodoItem[]>([])
+const weatherByWidget = ref<Record<string, WidgetWeatherState>>({})
 const editMode = ref(false)
 const initialized = ref(false)
+let syncInitialized = false
+let widgetChannel: BroadcastChannel | null = null
+let applyingRemoteState = false
 
 // Generate unique ID
 function generateId(): string {
@@ -93,21 +107,113 @@ function loadTodos(): TodoItem[] {
   return []
 }
 
+function loadWeather(): Record<string, WidgetWeatherState> {
+  try {
+    const stored = localStorage.getItem(WEATHER_STORAGE_KEY)
+    if (stored) return JSON.parse(stored)
+  } catch (e) {
+    console.error('Failed to load widget weather:', e)
+  }
+  return {}
+}
+
 // Save to localStorage
-function saveWidgets() {
+function saveWidgets(broadcast = true) {
+  if (applyingRemoteState) return
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(widgets.value))
   } catch (e) {
     console.error('Failed to save widgets:', e)
   }
+  if (broadcast) broadcastWidgetState()
 }
 
-function saveTodos() {
+function saveTodos(broadcast = true) {
+  if (applyingRemoteState) return
   try {
     localStorage.setItem(TODO_STORAGE_KEY, JSON.stringify(todos.value))
   } catch (e) {
     console.error('Failed to save todos:', e)
   }
+  if (broadcast) broadcastWidgetState()
+}
+
+function saveWeather(broadcast = true) {
+  if (applyingRemoteState) return
+  try {
+    localStorage.setItem(WEATHER_STORAGE_KEY, JSON.stringify(weatherByWidget.value))
+  } catch (e) {
+    console.error('Failed to save widget weather:', e)
+  }
+  if (broadcast) broadcastWidgetState()
+}
+
+function broadcastWidgetState() {
+  if (!widgetChannel) return
+  try {
+    widgetChannel.postMessage(JSON.parse(JSON.stringify({
+      widgets: widgets.value,
+      todos: todos.value,
+      weatherByWidget: weatherByWidget.value,
+    })))
+  } catch (error) {
+    console.warn('Failed to broadcast widget state:', error)
+  }
+}
+
+function applyWidgetState(state: unknown) {
+  if (!state || typeof state !== 'object') return
+  const snapshot = state as {
+    widgets?: WidgetConfig[]
+    todos?: TodoItem[]
+    weatherByWidget?: Record<string, WidgetWeatherState>
+  }
+
+  applyingRemoteState = true
+  if (Array.isArray(snapshot.widgets)) widgets.value = snapshot.widgets
+  if (Array.isArray(snapshot.todos)) todos.value = snapshot.todos
+  if (snapshot.weatherByWidget && typeof snapshot.weatherByWidget === 'object') {
+    weatherByWidget.value = snapshot.weatherByWidget
+  }
+  applyingRemoteState = false
+}
+
+function initializeWidgetSync() {
+  if (syncInitialized || typeof window === 'undefined') return
+  syncInitialized = true
+
+  if (typeof BroadcastChannel !== 'undefined') {
+    widgetChannel = new BroadcastChannel(WIDGET_CHANNEL_NAME)
+    widgetChannel.onmessage = (event) => applyWidgetState(event.data)
+  }
+
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORAGE_KEY && event.newValue) {
+      try {
+        applyWidgetState({ widgets: JSON.parse(event.newValue) })
+      } catch {
+        // Ignore invalid state from older versions.
+      }
+    }
+    if (event.key === TODO_STORAGE_KEY && event.newValue) {
+      try {
+        applyWidgetState({ todos: JSON.parse(event.newValue) })
+      } catch {
+        // Ignore invalid state from older versions.
+      }
+    }
+    if (event.key === WEATHER_STORAGE_KEY && event.newValue) {
+      try {
+        applyWidgetState({ weatherByWidget: JSON.parse(event.newValue) })
+      } catch {
+        // Ignore invalid state from older versions.
+      }
+    }
+  })
+
+  watch(widgets, () => saveWidgets(), { deep: true, flush: 'sync' })
+  watch(todos, () => saveTodos(), { deep: true, flush: 'sync' })
+  watch(weatherByWidget, () => saveWeather(), { deep: true, flush: 'sync' })
 }
 
 export function useWidgets() {
@@ -115,12 +221,11 @@ export function useWidgets() {
   if (!initialized.value) {
     widgets.value = loadWidgets()
     todos.value = loadTodos()
+    weatherByWidget.value = loadWeather()
     initialized.value = true
   }
 
-  // Watch for changes and persist
-  watch(widgets, saveWidgets, { deep: true })
-  watch(todos, saveTodos, { deep: true })
+  initializeWidgetSync()
 
   // Grid configuration computed from screen size
   const gridConfig = computed<GridConfig>(() => {
@@ -254,6 +359,7 @@ export function useWidgets() {
     const index = widgets.value.findIndex((w) => w.id === id)
     if (index !== -1) {
       widgets.value.splice(index, 1)
+      delete weatherByWidget.value[id]
     }
   }
 
@@ -332,6 +438,23 @@ export function useWidgets() {
   const pendingTodos = computed(() => todos.value.filter((t) => !t.completed))
   const completedTodos = computed(() => todos.value.filter((t) => t.completed))
 
+  function setWidgetWeather(
+    widgetId: string,
+    location: string,
+    data: StandardWeatherData | null,
+  ) {
+    if (!data) {
+      delete weatherByWidget.value[widgetId]
+      return
+    }
+
+    weatherByWidget.value[widgetId] = {
+      location,
+      data,
+      updatedAt: Date.now(),
+    }
+  }
+
   // === LLM Context ===
 
   // Get aggregated widget context for LLM
@@ -366,12 +489,27 @@ export function useWidgets() {
           break
         }
         case 'weather': {
-          // Weather context will be populated by weather widget
-          contexts.push({
-            type: 'weather',
-            summary: '天气信息暂未获取',
-            data: {},
-          })
+          const current = weatherByWidget.value[widget.id]
+          const settings = widget.settings as WeatherWidgetSettings
+          if (current) {
+            contexts.push({
+              type: 'weather',
+              summary: `${current.location}当前${current.data.condition}，${current.data.temp}°C，湿度${current.data.humidity}%`,
+              data: {
+                location: current.location,
+                ...current.data,
+                updatedAt: current.updatedAt,
+              },
+            })
+          } else {
+            contexts.push({
+              type: 'weather',
+              summary: settings.location
+                ? `${settings.location}的天气信息暂未获取`
+                : '天气位置尚未设置',
+              data: { location: settings.location },
+            })
+          }
           break
         }
         case 'photo': {
@@ -402,6 +540,7 @@ export function useWidgets() {
     // State
     widgets,
     todos,
+    weatherByWidget,
     editMode,
     enabledWidgets,
     pendingTodos,
@@ -420,6 +559,7 @@ export function useWidgets() {
     updateWidgetPosition,
     updateWidgetSettings,
     toggleWidget,
+    setWidgetWeather,
 
     // Todo CRUD
     addTodo,
