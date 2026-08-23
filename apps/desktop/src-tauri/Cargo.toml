@@ -1,6 +1,6 @@
 [package]
 name = "tablefri"
-version = "0.1.0"
+version = "1.4.0"
 description = "AI Live2D Desktop Pet"
 authors = ["TableFri Team"]
 license = ""

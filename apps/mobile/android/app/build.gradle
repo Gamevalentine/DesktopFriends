@@ -3,7 +3,7 @@ apply plugin: 'com.android.application'
 // 从环境变量读取版本号（用于 CI/CD），否则使用默认值
 def getVersionName = { ->
     def envVersion = System.getenv("VERSION_NAME")
-    return envVersion ?: "1.0.0"
+    return envVersion ?: "1.4.0"
 }
 
 def getVersionCode = { ->
@@ -11,7 +11,7 @@ def getVersionCode = { ->
     if (envCode) {
         return envCode.toInteger()
     }
-    return 1
+    return 140
 }
 
 android {
