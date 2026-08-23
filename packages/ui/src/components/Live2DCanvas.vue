@@ -79,6 +79,8 @@ let app: PIXI.Application | null = null;
 let model: any = null;
 let placeholder: PIXI.Text | null = null;
 let baseScale = 1; // 基础缩放比例（适应屏幕的）
+let naturalModelWidth = 0;
+let naturalModelHeight = 0;
 let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
 let lastOrientation: "portrait" | "landscape" | null = null; // 记录上次屏幕方向
 
@@ -113,8 +115,8 @@ const refreshCanvas = () => {
   if (model) {
     baseScale =
       Math.min(
-        app.screen.width / model.width,
-        app.screen.height / model.height
+        app.screen.width / naturalModelWidth,
+        app.screen.height / naturalModelHeight
       ) * 0.8;
 
     // 重新应用变换
@@ -200,11 +202,14 @@ const loadModel = async (modelPath: string) => {
       autoUpdate: true, // 自动更新
     });
 
+    naturalModelWidth = model.width;
+    naturalModelHeight = model.height;
+
     // 计算基础缩放比例（适应屏幕）
     baseScale =
       Math.min(
-        app.screen.width / model.width,
-        app.screen.height / model.height
+        app.screen.width / naturalModelWidth,
+        app.screen.height / naturalModelHeight
       ) * 0.8;
 
     model.anchor.set(0.5, 0.5);
@@ -430,6 +435,7 @@ onMounted(async () => {
   app = new PIXI.Application({
     view: canvasRef.value,
     backgroundAlpha: 0,
+    preserveDrawingBuffer: true,
     width,
     height,
     antialias: true,
@@ -513,42 +519,79 @@ onUnmounted(() => {
   app?.destroy(true);
 });
 
+// 获取模型边界框（窗口坐标）
+const getModelBounds = () => {
+  if (!model || !app || !canvasRef.value) return null;
+
+  // Pixi 返回的是已包含 anchor、scale 和 position 的世界坐标。
+  // 再加上 canvas 相对窗口的偏移，才能与 Tauri 鼠标坐标比较。
+  const bounds = model.getBounds();
+  const canvasRect = canvasRef.value.getBoundingClientRect();
+  const left = canvasRect.left + bounds.x;
+  const top = canvasRect.top + bounds.y;
+  const width = bounds.width;
+  const height = bounds.height;
+
+  return {
+    left,
+    right: left + width,
+    top,
+    bottom: top + height,
+    width,
+    height,
+    centerX: left + width / 2,
+    centerY: top + height / 2,
+  };
+};
+
+// 检查窗口坐标下的当前渲染像素是否属于可见模型。
+// 只读取一个 WebGL 像素，透明背景不会触发 hover。
+const isPointOnModel = (windowX: number, windowY: number) => {
+  if (!model || !app || !canvasRef.value) return false;
+
+  const bounds = getModelBounds();
+  if (
+    !bounds ||
+    windowX < bounds.left ||
+    windowX > bounds.right ||
+    windowY < bounds.top ||
+    windowY > bounds.bottom
+  ) {
+    return false;
+  }
+
+  const canvasRect = canvasRef.value.getBoundingClientRect();
+  if (!canvasRect.width || !canvasRect.height) return false;
+
+  const canvasX =
+    ((windowX - canvasRect.left) / canvasRect.width) * app.screen.width;
+  const canvasY =
+    ((windowY - canvasRect.top) / canvasRect.height) * app.screen.height;
+
+  try {
+    const extract = (app.renderer as any).plugins?.extract;
+    if (!extract) return false;
+
+    // WebGL 原点在左下角，窗口坐标原点在左上角。
+    const readY = Math.max(0, app.screen.height - canvasY - 1);
+    const pixel = extract.pixels(
+      null,
+      new PIXI.Rectangle(canvasX, readY, 1, 1),
+    ) as Uint8Array;
+
+    // 过滤反锯齿边缘上几乎全透明的像素。
+    return pixel[3] >= 16;
+  } catch {
+    return false;
+  }
+};
+
 // 暴露方法供外部调用
 defineExpose({
   loadModel,
   refreshCanvas, // 刷新画布（屏幕方向变化时调用）
-  // 获取模型边界框（用于点击检测）
-  getModelBounds: () => {
-    if (!model || !app) return null;
-
-    // // 模型的边界框
-    // const modelBounds = model.getBounds();
-    // // 获取主容器
-    // const stageContainer = app.stage;
-    // const containerBounds = stageContainer.getBounds();
-
-    const transform = live2dTransform.value;
-    const finalScale = baseScale * transform.scale;
-    const centerX = app.screen.width / 2;
-    const centerY = app.screen.height / 2;
-    const offsetX = (transform.offsetX / 100) * app.screen.width;
-    const offsetY = (transform.offsetY / 100) * app.screen.height;
-    const modelWidth = model.width * finalScale;
-    const modelHeight = model.height * finalScale;
-    const posX = centerX + offsetX;
-    const posY = centerY + offsetY;
-
-    return {
-      left: posX - modelWidth / 2,
-      right: posX + modelWidth / 2,
-      top: posY - modelHeight / 2,
-      bottom: posY + modelHeight / 2,
-      width: modelWidth,
-      height: modelHeight,
-      centerX: posX,
-      centerY: posY,
-    };
-  },
+  getModelBounds,
+  isPointOnModel,
   // 播放动作组（随机选择组内一个动作）
   playMotion: (group: string) => {
     if (model) {

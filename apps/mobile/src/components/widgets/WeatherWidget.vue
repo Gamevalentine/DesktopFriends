@@ -5,13 +5,14 @@ import type {
   WeatherWidgetSettings,
   StandardWeatherData,
 } from "@desktopfriends/shared";
-import { getWeatherByCityName } from "@desktopfriends/core";
+import { getWeatherByCityName, useWidgets } from "@desktopfriends/core";
 
 const props = defineProps<{
   widget: WidgetConfig;
 }>();
 
 const settings = computed(() => props.widget.settings as WeatherWidgetSettings);
+const { setWidgetWeather } = useWidgets();
 
 // 获取 API Key（优先使用用户自定义的，否则使用环境变量）
 const apiKey = computed(() => {
@@ -78,6 +79,7 @@ async function fetchWeather() {
   if (!settings.value.location) {
     error.value = "请设置位置";
     weatherData.value = null;
+    setWidgetWeather(props.widget.id, "", null);
     return;
   }
 
@@ -94,6 +96,7 @@ async function fetchWeather() {
     );
 
     weatherData.value = data;
+    setWidgetWeather(props.widget.id, settings.value.location, data);
 
     console.log(
       `✅ 天气获取成功: ${settings.value.location}`,
@@ -104,6 +107,7 @@ async function fetchWeather() {
 
     // Clear weather data on error
     weatherData.value = null;
+    setWidgetWeather(props.widget.id, settings.value.location, null);
 
     // Set specific error message
     error.value = e.message || "获取天气失败";

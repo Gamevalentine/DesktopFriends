@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
 </p>
 
-A cross-platform AI-powered Live2D desktop pet. Runs on **desktop (macOS)** and **mobile (Android)**, with LLM-driven conversations, an agentic tool-calling system, and multi-device pet networking over LAN.
+A cross-platform AI-powered Live2D desktop pet for **desktop (macOS)** and **mobile (Android)**. Beyond LLM conversations and LAN pet networking, TableFri gives the pet a sense of time through an agent-managed schedule and a local heartbeat, allowing it to plan and initiate interactions instead of only replying.
 
 Turn your old phone into an AI companion that lives on your desk.
 
@@ -20,6 +20,22 @@ Turn your old phone into an AI companion that lives on your desk.
 Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's adorable!
 
   ![Demo](./assets/ezgif-544a92538432332a.gif)
+
+## Highlight: From Reactive Chat to Proactive Companionship
+
+Most AI characters wait for the user to speak first. TableFri's **Timemap system** lets the agent schedule semantic tasks, while a local heartbeat wakes it when an entry becomes due:
+
+```text
+“Remind me to drink water at 3pm”
+        ↓
+Agent creates a 15:00 timemap entry
+        ↓
+Local heartbeat checks every 60 seconds (no token cost per check)
+        ↓
+Entry becomes due → Agent acts in character → Chat bubble appears proactively
+```
+
+The same mechanism supports user reminders and autonomous greetings or break prompts. One-time entries expire after the day, while daily entries reset for the next day. See the [Timemap guide](./docs/guide/timemap.md) for details.
 
 ## Features
 
@@ -39,9 +55,10 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 - **Emotion-to-Motion Mapping** — Multi-level inference (exact match → keyword match → fuzzy match → default)
 
 ### Widget System
-- **Desktop Widgets** — Clock, Photo Album, Weather, and Todo List
-- **Agent-controllable** — The AI agent can view, add, and complete todo items through tool calls
-- **Customizable Layout** — Drag-and-drop positioning and resizing
+- **Widgets as Capabilities** — Enabling Clock, Weather, or Todo dynamically registers matching agent tools; removing the last widget of a type unregisters them
+- **Desktop Windows** — Clock, Weather, and Todo use independent background-free transparent windows
+- **Mobile Grid** — Drag, resize, remove, and place multiple widget instances
+- **Shared Live State** — Weather and todo state flow into agent context; Photo is still under development
 
 ### Timemap & Heartbeat System
 - **Agent-driven Schedule** — The pet autonomously creates a daily schedule (e.g., "say good afternoon at 2pm") using tool calls
@@ -50,6 +67,9 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 - **User Reminders** — Users can say "remind me to drink water at 3pm" and the agent creates a timemap entry
 - **Persistent & Cross-day** — Stored in localStorage; `daily` entries carry over across days, `once` entries auto-expire
 - **More than a fixed timer** — Timemap is a client-side, agent-managed semantic schedule where the AI decides *what* to do and *when*
+- **Full Lifecycle Tools** — The agent can view, add, update, remove, or clear entries
+
+> The complete heartbeat execution flow is currently wired into Android. Timemap state, tools, and scheduling primitives live in the shared core package. The app must remain running; Android background keep-alive is still in progress.
 
 ### Live2D & Interaction
 - **Live2D Rendering** — Smooth Live2D model display with motion and expression switching
@@ -67,6 +87,8 @@ Thanks to [@Carbon](https://github.com/CoderSerio) for the Live2D model — it's
 - **Transparent Window** — Frameless transparent window; the pet floats on your desktop
 - **Click-through** — Mouse clicks pass through to windows below when not on the model
 - **Lock Mode** — One-click lock to disable click-through and keep UI visible
+- **Separate Chat History** — Review, clear, and export complete history in an opaque resizable window
+- **Transparent Desktop Widgets** — Background-free Clock, Weather, and Todo windows with dynamic agent capabilities
 - **Plugin System** — Manifest-driven external plugin extensions with custom tool injection
 
 ### Mobile-only (Android)
@@ -301,7 +323,7 @@ Then in Android Studio: Build > Build Bundle(s) / APK(s) > Build APK(s).
   - [x] Live2D model upload
 - [x] **Widget System**
   - [x] Clock widget
-  - [x] Photo album widget
+  - [ ] Photo album widget
   - [x] Weather widget
   - [x] Todo widget
 - [x] Live2D rendering (pixi-live2d-display)
