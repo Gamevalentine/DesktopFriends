@@ -39,10 +39,11 @@ Nhánh: `live2d-hardening`
 - [x] Chặn ZIP path traversal / absolute path.
 - [x] Chỉ chọn model JSON khi các file bắt buộc mà model tham chiếu thực sự tồn tại.
 - [x] Chỉ giải nén phạm vi model đã chọn, tránh file rác ngoài model root.
-- [ ] CI Windows xanh sau hardening.
-- [ ] Runtime import ZIP Cubism 3/4 trên Windows.
+- [x] CI Windows xanh sau hardening.
+- [x] Sửa false-positive validator với thư mục bình thường trong ZIP.
+- [x] Runtime import ZIP Cubism 3/4 trên Windows (Hiyori test: 1 texture, 8 motion, 6 motion groups, 14 files).
 - [ ] Runtime import ZIP Cubism 2 trên Windows.
-- [ ] Kiểm tra texture/motion/expression sau import.
+- [ ] Kiểm tra runtime texture/motion/expression sau import bằng model có đủ expression.
 
 ### B2 — Interaction
 - [ ] Bỏ hard-code phụ thuộc tên `tap_body` / `happy`.
