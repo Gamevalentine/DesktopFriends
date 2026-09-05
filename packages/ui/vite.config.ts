@@ -26,6 +26,7 @@ export default defineConfig({
         '@desktopfriends/core',
         '@desktopfriends/shared',
         '@desktopfriends/platform',
+        '@tauri-apps/api/tauri',
       ],
       output: {
         globals: {
