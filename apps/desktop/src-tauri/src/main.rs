@@ -117,17 +117,38 @@ fn get_mime_type(path: &str) -> &'static str {
 fn normalize_localfile_path(path: String) -> String {
     #[cfg(target_os = "windows")]
     {
-        let bytes = path.as_bytes();
+        let mut normalized = path.replace('\\', "/");
+        let bytes = normalized.as_bytes();
+
         if bytes.len() >= 3
             && bytes[0] == b'/'
             && bytes[1].is_ascii_alphabetic()
             && bytes[2] == b':'
         {
-            return path[1..].to_string();
+            normalized.remove(0);
         }
+
+        // Existing desktop code encodes a Windows path as part of the custom URL host.
+        // Relative Live2D assets can therefore arrive as:
+        // C:/.../model.model3.json/textures/texture.png
+        // Convert that back to the model directory before reading the asset.
+        let lower = normalized.to_ascii_lowercase();
+        for marker in [".model3.json/", ".model.json/"] {
+            if let Some(marker_start) = lower.find(marker) {
+                if let Some(dir_end) = normalized[..marker_start].rfind('/') {
+                    let asset_start = marker_start + marker.len();
+                    return format!("{}{}", &normalized[..=dir_end], &normalized[asset_start..]);
+                }
+            }
+        }
+
+        return normalized;
     }
 
-    path
+    #[cfg(not(target_os = "windows"))]
+    {
+        path
+    }
 }
 
 fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std::error::Error>> {
