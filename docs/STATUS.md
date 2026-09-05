@@ -30,12 +30,12 @@ Regression còn để lại cho phase L:
 
 ## Phase B — Live2D
 
-**Trạng thái: ĐANG LÀM — B2 Interaction**
+**Trạng thái: ĐANG LÀM — B1 runtime render fix / B2 interaction code**
 
 Nhánh: `live2d-hardening`
 
 ### B1 — Model loader
-**Trạng thái: HOÀN THÀNH**
+**Trạng thái: IMPORT/METADATA ĐẠT; ĐANG XÁC NHẬN LẠI RENDER MODEL LOCAL TRÊN WINDOWS**
 
 - [x] Rà source import ZIP hiện tại.
 - [x] Chặn ZIP path traversal / absolute path.
@@ -45,12 +45,18 @@ Nhánh: `live2d-hardening`
 - [x] Sửa false-positive validator với thư mục bình thường trong ZIP.
 - [x] Runtime import ZIP Cubism 3/4 trên Windows (Hiyori: 1 texture, 8 motion, 6 motion groups, 14 files).
 - [x] Runtime import ZIP Cubism 2 trên Windows (Shizuku: 4 expressions, 18 motions, 6 motion groups, 6 textures, 47 files).
-- [x] Xác nhận texture/motion/expression metadata sau import bằng model thực tế.
+- [x] Xác nhận metadata texture/motion/expression sau import.
+- [x] Xác định lỗi Windows local model URL: frontend tự tạo `localfile://...` không theo mapping WebView2 của Tauri.
+- [x] Chuyển frontend sang `convertFileSrc(filePath, "localfile")` của Tauri.
+- [x] Backend nhận cả `localfile://localhost/...` và `https://localfile.localhost/...`.
+- [x] CSP cho phép `https://localfile.localhost` cho model texture/media/connect.
+- [ ] Runtime: Shizuku Cubism 2 render thật trên Windows sau fix 1.4.4.
+- [ ] Runtime: motion/expression tải và phát thật từ model local.
 
 ### B2 — Interaction
-- [ ] Bỏ hard-code phụ thuộc tên `tap_body` / `happy`.
-- [ ] Fallback motion/expression theo model thực tế.
-- [ ] Click đầu/thân.
+- [x] Bỏ hard-code phụ thuộc tên `tap_body` / `happy` trong code.
+- [x] Fallback motion/expression theo model thực tế trong code.
+- [ ] Runtime click đầu/thân trên model local sau khi render được.
 - [x] Pixel-alpha hit test không bắt vùng canvas trong suốt — đã xác nhận trên Windows thật ở Phase A.
 
 ### B3 — Window behavior
