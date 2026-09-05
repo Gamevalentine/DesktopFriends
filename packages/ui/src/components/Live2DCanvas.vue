@@ -4,7 +4,6 @@ import {
   onMounted,
   onUnmounted,
   onActivated,
-  // onDeactivated,
   watch,
 } from "vue";
 import * as PIXI from "pixi.js";
@@ -12,45 +11,54 @@ import { Live2DModel } from "pixi-live2d-display";
 import { isDesktopPlatform } from "@desktopfriends/platform";
 import { useSettings } from "@desktopfriends/core";
 
-// 将本地文件路径转换为 localfile:// URL（仅桌面端）
-// 使用自定义 localfile:// 协议，该协议在 Tauri 后端注册并带有 CORS 头
 const convertToLocalfileUrl = (filePath: string): string => {
-  // 只编码每个路径段内的特殊字符，保留路径分隔符
-  const encodedPath = filePath
-    .split('/')
-    .map(segment => encodeURIComponent(segment))
-    .join('/');
-  return `localfile://localhost${encodedPath}`;
+  const normalizedPath = filePath.replace(/\\/g, "/");
+  const encodedPath = normalizedPath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
+  const protocolPath = /^[a-zA-Z]%3A\//.test(encodedPath)
+    ? `/${encodedPath}`
+    : encodedPath.startsWith("/")
+      ? encodedPath
+      : `/${encodedPath}`;
+
+  return `localfile://localhost${protocolPath}`;
 };
 
-// 判断路径是否为文件系统绝对路径（而非 web 相对路径）
 const isFileSystemPath = (path: string): boolean => {
-  // macOS 文件系统路径特征
-  if (path.startsWith('/Users/') || path.startsWith('/Library/') ||
-      path.startsWith('/Applications/') || path.startsWith('/Volumes/') ||
-      path.startsWith('/private/') || path.startsWith('/tmp/')) {
+  if (/^[a-zA-Z]:[\\/]/.test(path)) return true;
+
+  if (
+    path.startsWith("/Users/") ||
+    path.startsWith("/Library/") ||
+    path.startsWith("/Applications/") ||
+    path.startsWith("/Volumes/") ||
+    path.startsWith("/private/") ||
+    path.startsWith("/tmp/")
+  ) {
     return true;
   }
-  // Linux 文件系统路径特征
-  if (path.startsWith('/home/') || path.startsWith('/var/') ||
-      path.startsWith('/opt/') || path.startsWith('/usr/')) {
+
+  if (
+    path.startsWith("/home/") ||
+    path.startsWith("/var/") ||
+    path.startsWith("/opt/") ||
+    path.startsWith("/usr/")
+  ) {
     return true;
   }
-  // 包含 Application Support（macOS 应用数据目录）
-  if (path.includes('Application Support') || path.includes('AppData')) {
-    return true;
-  }
-  return false;
+
+  return path.includes("Application Support") || path.includes("AppData");
 };
 
-// Live2DTransform 类型定义（从 core 包重新导出）
 export interface Live2DTransform {
   scale: number;
   offsetX: number;
   offsetY: number;
 }
 
-// 注册 Live2D 到 PIXI（必须在加载模型前执行）
 // @ts-ignore
 window.PIXI = PIXI;
 
@@ -60,38 +68,143 @@ const { currentPet, live2dTransform } = useSettings();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const isLoading = ref(false);
 const error = ref<string | null>(null);
-const renderWarning = ref(false); // 渲染警告状态（移动端纹理兼容性问题）
+const renderWarning = ref(false);
 
-// 动作组信息
 export interface MotionInfo {
-  group: string; // 动作组名
-  name: string; // 动作名称
-  index: number; // 在组内的索引
+  group: string;
+  name: string;
+  index: number;
 }
 
-// 当前模型可用的动作和表情
-const availableMotions = ref<string[]>([]); // 动作组名列表
-const availableExpressions = ref<string[]>([]); // 表情列表
-const motionDetails = ref<MotionInfo[]>([]); // 详细动作列表
+const availableMotions = ref<string[]>([]);
+const availableExpressions = ref<string[]>([]);
+const motionDetails = ref<MotionInfo[]>([]);
 
 let app: PIXI.Application | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let model: any = null;
 let placeholder: PIXI.Text | null = null;
-let baseScale = 1; // 基础缩放比例（适应屏幕的）
+let baseScale = 1;
 let naturalModelWidth = 0;
 let naturalModelHeight = 0;
 let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
-let lastOrientation: "portrait" | "landscape" | null = null; // 记录上次屏幕方向
+let lastOrientation: "portrait" | "landscape" | null = null;
 
-// 应用变换设置
+const tokenizeInteractionName = (value: string): string[] =>
+  value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+const HEAD_TOKENS = new Set(["head", "face", "mouth"]);
+const BODY_TOKENS = new Set(["body", "torso", "chest"]);
+const ACTION_TOKENS = new Set(["tap", "touch", "flick", "poke", "click"]);
+
+const getHitKind = (hitAreas: string[]): "head" | "body" | "generic" => {
+  for (const area of hitAreas) {
+    const tokens = tokenizeInteractionName(area);
+    if (tokens.some((token) => HEAD_TOKENS.has(token))) return "head";
+  }
+
+  for (const area of hitAreas) {
+    const tokens = tokenizeInteractionName(area);
+    if (tokens.some((token) => BODY_TOKENS.has(token))) return "body";
+  }
+
+  return "generic";
+};
+
+const getIdleMotionGroup = (): string | null => {
+  const group = model?.internalModel?.motionManager?.groups?.idle;
+  return typeof group === "string" ? group : null;
+};
+
+const chooseMotionGroup = (kind: "head" | "body" | "generic"): string | null => {
+  const groups = availableMotions.value;
+  if (groups.length === 0) return null;
+
+  const idleGroup = getIdleMotionGroup();
+  const idleNormalized = idleGroup?.toLowerCase();
+  const areaTokens = kind === "head" ? HEAD_TOKENS : kind === "body" ? BODY_TOKENS : null;
+
+  let bestGroup: string | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const group of groups) {
+    const tokens = tokenizeInteractionName(group);
+    const isIdle = idleNormalized
+      ? group.toLowerCase() === idleNormalized
+      : tokens.includes("idle");
+
+    let score = isIdle ? -100 : 1;
+
+    if (areaTokens && tokens.some((token) => areaTokens.has(token))) {
+      score += 20;
+    }
+    if (tokens.some((token) => ACTION_TOKENS.has(token))) {
+      score += 6;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestGroup = group;
+    }
+  }
+
+  if (bestGroup && bestScore > -100) return bestGroup;
+  return groups[0] ?? null;
+};
+
+const playBestMotion = async (kind: "head" | "body" | "generic") => {
+  if (!model) return false;
+  const group = chooseMotionGroup(kind);
+  if (!group) return false;
+
+  try {
+    const started = await model.motion(group);
+    console.log("Interaction motion:", kind, "->", group, started);
+    return started !== false;
+  } catch (e) {
+    console.warn("Failed to play interaction motion:", group, e);
+    return false;
+  }
+};
+
+const playRandomExpression = async () => {
+  if (!model || availableExpressions.value.length === 0) return false;
+
+  try {
+    const applied = await model.expression();
+    console.log("Interaction expression applied:", applied);
+    return applied !== false;
+  } catch (e) {
+    console.warn("Failed to apply interaction expression:", e);
+    return false;
+  }
+};
+
+const handleModelHit = async (hitAreas: string[]) => {
+  const kind = getHitKind(hitAreas);
+  console.log("Hit areas:", hitAreas, "kind:", kind);
+
+  if (kind === "head") {
+    await Promise.all([playBestMotion("head"), playRandomExpression()]);
+    return;
+  }
+
+  if (kind === "body") {
+    await playBestMotion("body");
+    return;
+  }
+
+  await playBestMotion("generic");
+};
+
 const applyTransform = (transform: Live2DTransform) => {
   if (!model || !app) return;
 
-  // 计算最终缩放
   const finalScale = baseScale * transform.scale;
-
-  // 计算位置偏移
   const centerX = app.screen.width / 2;
   const centerY = app.screen.height / 2;
   const offsetX = (transform.offsetX / 100) * app.screen.width;
@@ -101,90 +214,138 @@ const applyTransform = (transform: Live2DTransform) => {
   model.position.set(centerX + offsetX, centerY + offsetY);
 };
 
-// 刷新画布大小和模型位置
 const refreshCanvas = () => {
   if (!app || !canvasRef.value) return;
 
-  // 重新计算画布大小
   const parent = canvasRef.value.parentElement;
   if (parent) {
     app.renderer.resize(parent.clientWidth, parent.clientHeight);
   }
 
-  // 重新计算模型的基础缩放和位置
   if (model) {
     baseScale =
       Math.min(
         app.screen.width / naturalModelWidth,
-        app.screen.height / naturalModelHeight
+        app.screen.height / naturalModelHeight,
       ) * 0.8;
-
-    // 重新应用变换
     applyTransform(live2dTransform.value);
   }
 
-  // 更新占位符位置
   if (placeholder) {
     placeholder.position.set(app.screen.width / 2, app.screen.height / 2);
     placeholder.style.wordWrapWidth = app.screen.width * 0.8;
   }
 };
 
-// 处理屏幕方向变化（只在真正方向改变时刷新）
 const handleOrientationChange = () => {
-  // 检测当前方向
   const currentOrientation =
     window.innerWidth > window.innerHeight ? "landscape" : "portrait";
 
-  // 只有方向真正改变时才刷新（忽略键盘等导致的 resize）
   if (lastOrientation !== null && lastOrientation === currentOrientation) {
-    console.log("Ignoring resize, orientation unchanged:", currentOrientation);
     return;
   }
 
-  if (resizeTimeout) {
-    clearTimeout(resizeTimeout);
-  }
-  // 延迟刷新，等待布局稳定
+  if (resizeTimeout) clearTimeout(resizeTimeout);
+
   resizeTimeout = setTimeout(() => {
-    console.log(
-      "Screen orientation changed:",
-      lastOrientation,
-      "->",
-      currentOrientation
-    );
     lastOrientation = currentOrientation;
     refreshCanvas();
   }, 100);
 };
 
-// 加载模型
+const extractModelCapabilities = () => {
+  availableMotions.value = [];
+  availableExpressions.value = [];
+  motionDetails.value = [];
+
+  try {
+    const motionManager = model?.internalModel?.motionManager;
+    const definitions = motionManager?.definitions;
+    if (definitions) {
+      const groups: string[] = [];
+      const details: MotionInfo[] = [];
+
+      for (const group in definitions) {
+        const groupMotions = definitions[group];
+        if (!Array.isArray(groupMotions) || groupMotions.length === 0) continue;
+
+        groups.push(group);
+        groupMotions.forEach(
+          (
+            motion: {
+              Name?: string;
+              name?: string;
+              File?: string;
+              file?: string;
+            },
+            index: number,
+          ) => {
+            const motionFile = motion.File || motion.file;
+            let motionName = motion.Name || motion.name;
+
+            if (!motionName && motionFile) {
+              motionName =
+                motionFile
+                  .split(/[\\/]/)
+                  .pop()
+                  ?.replace(/\.(motion3?\.json|mtn)$/i, "") || `${group}_${index}`;
+            }
+
+            details.push({
+              group,
+              name: motionName || `${group}_${index}`,
+              index,
+            });
+          },
+        );
+      }
+
+      availableMotions.value = groups;
+      motionDetails.value = details;
+      console.log("Available motion groups:", groups);
+    }
+  } catch (e) {
+    console.warn("Could not extract motions:", e);
+  }
+
+  try {
+    const expressionManager =
+      model?.internalModel?.motionManager?.expressionManager;
+    const definitions = expressionManager?.definitions;
+
+    if (Array.isArray(definitions)) {
+      availableExpressions.value = definitions.map(
+        (definition: { name?: string; Name?: string }, index: number) =>
+          definition.name || definition.Name || String(index),
+      );
+      console.log("Available expressions:", availableExpressions.value);
+    }
+  } catch (e) {
+    console.warn("Could not extract expressions:", e);
+  }
+};
+
 const loadModel = async (modelPath: string) => {
   if (!app || !modelPath) return;
 
   isLoading.value = true;
   error.value = null;
-  renderWarning.value = false; // 重置渲染警告
-
-  // 清空可用动作和表情
+  renderWarning.value = false;
   availableMotions.value = [];
   availableExpressions.value = [];
   motionDetails.value = [];
 
-  // 清除旧模型
   if (model) {
     app.stage.removeChild(model);
     model.destroy();
     model = null;
   }
 
-  // 清除占位符
   if (placeholder) {
     app.stage.removeChild(placeholder);
     placeholder = null;
   }
 
-  // 转换本地文件路径为 localfile:// URL（仅桌面端的文件系统路径）
   let finalPath = modelPath;
   if (isDesktopPlatform() && isFileSystemPath(modelPath)) {
     try {
@@ -198,136 +359,45 @@ const loadModel = async (modelPath: string) => {
   try {
     console.log("Loading Live2D model:", finalPath);
     model = await Live2DModel.from(finalPath, {
-      autoInteract: true, // 自动处理鼠标/触摸交互
-      autoUpdate: true, // 自动更新
+      autoInteract: true,
+      autoUpdate: true,
     });
 
     naturalModelWidth = model.width;
     naturalModelHeight = model.height;
 
-    // 计算基础缩放比例（适应屏幕）
     baseScale =
       Math.min(
         app.screen.width / naturalModelWidth,
-        app.screen.height / naturalModelHeight
+        app.screen.height / naturalModelHeight,
       ) * 0.8;
 
     model.anchor.set(0.5, 0.5);
-
-    // 应用保存的变换设置
     applyTransform(live2dTransform.value);
-
     app.stage.addChild(model);
 
-    // 提取可用的动作（详细信息）
-    try {
-      const motionManager = model.internalModel?.motionManager;
-      if (motionManager?.definitions) {
-        const groups: string[] = [];
-        const details: MotionInfo[] = [];
-        const definitions = motionManager.definitions;
+    extractModelCapabilities();
 
-        for (const group in definitions) {
-          const groupMotions = definitions[group];
-          if (groupMotions && groupMotions.length > 0) {
-            groups.push(group);
-
-            // 提取组内每个动作的详细信息
-            groupMotions.forEach(
-              (
-                motion: { Name?: string; name?: string; File?: string },
-                index: number
-              ) => {
-                // 尝试获取动作名称，如果没有则使用文件名或索引
-                let motionName = motion.Name || motion.name;
-                if (!motionName && motion.File) {
-                  // 从文件名提取动作名（去掉路径和扩展名）
-                  motionName =
-                    motion.File.split("/")
-                      .pop()
-                      ?.replace(/\.motion3?\.json$/i, "") ||
-                    `${group}_${index}`;
-                }
-                if (!motionName) {
-                  motionName = `${group}_${index}`;
-                }
-
-                details.push({
-                  group,
-                  name: motionName,
-                  index,
-                });
-              }
-            );
-          }
-        }
-
-        availableMotions.value = groups;
-        motionDetails.value = details;
-        console.log("Available motion groups:", groups);
-        console.log("Motion details:", details);
-      }
-    } catch (e) {
-      console.warn("Could not extract motions:", e);
-    }
-
-    // 提取可用的表情
-    try {
-      const expressionManager =
-        model.internalModel?.motionManager?.expressionManager;
-      if (expressionManager?.definitions) {
-        const expressions = expressionManager.definitions
-          .map(
-            (def: { name?: string; Name?: string }) =>
-              def.name || def.Name || "unknown"
-          )
-          .filter((name: string) => name !== "unknown");
-        availableExpressions.value = expressions;
-        console.log("Available expressions:", expressions);
-      }
-    } catch (e) {
-      console.warn("Could not extract expressions:", e);
-    }
-
-    // 尝试播放空闲动作
-    try {
-      model.motion("idle");
-    } catch {
-      // 有些模型可能没有 idle 动作
-    }
-
-    // 点击交互
     model.on("hit", (hitAreas: string[]) => {
-      console.log("Hit areas:", hitAreas);
-      if (hitAreas.includes("body") || hitAreas.includes("Body")) {
-        model?.motion("tap_body");
-      }
-      if (hitAreas.includes("head") || hitAreas.includes("Head")) {
-        model?.expression("happy");
-      }
+      void handleModelHit(hitAreas);
     });
 
     console.log("Model loaded successfully");
 
-    // 检测 WebGL 渲染错误（移动端 NPOT 纹理兼容性问题）
-    // 通过监听 WebGL 错误日志来检测
     const checkWebGLError = () => {
-      if (app?.renderer.type === PIXI.RENDERER_TYPE.WEBGL) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const gl = (app.renderer as any).gl as WebGLRenderingContext;
-        if (gl) {
-          // 检查 WebGL 错误
-          const glError = gl.getError();
-          if (glError !== gl.NO_ERROR) {
-            console.warn("WebGL error detected:", glError);
-            renderWarning.value = true;
-            return;
-          }
-        }
+      if (app?.renderer.type !== PIXI.RENDERER_TYPE.WEBGL) return;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const gl = (app.renderer as any).gl as WebGLRenderingContext;
+      if (!gl) return;
+
+      const glError = gl.getError();
+      if (glError !== gl.NO_ERROR) {
+        console.warn("WebGL error detected:", glError);
+        renderWarning.value = true;
       }
     };
 
-    // 临时拦截 console.warn 来检测 NPOT 纹理错误
     const originalWarn = console.warn;
     let warningDetected = false;
     console.warn = function (...args: unknown[]) {
@@ -342,16 +412,11 @@ const loadModel = async (modelPath: string) => {
       return originalWarn.apply(console, args);
     };
 
-    // 延迟检测，等待首帧渲染
     setTimeout(() => {
-      // 恢复原始 console.warn
       console.warn = originalWarn;
-
       if (warningDetected) {
-        console.log("NPOT texture warning detected, showing render warning");
         renderWarning.value = true;
       } else {
-        // 也检查 WebGL 错误
         checkWebGLError();
       }
     }, 1000);
@@ -364,7 +429,6 @@ const loadModel = async (modelPath: string) => {
   }
 };
 
-// 显示占位符
 const showPlaceholder = () => {
   if (!app) return;
 
@@ -379,16 +443,14 @@ const showPlaceholder = () => {
       align: "center",
       wordWrap: true,
       wordWrapWidth: app.screen.width * 0.8,
-    }
+    },
   );
   placeholder.anchor.set(0.5);
   placeholder.position.set(app.screen.width / 2, app.screen.height / 2);
   app.stage.addChild(placeholder);
 };
 
-// 尝试自动发现模型
 const tryAutoLoadModel = async () => {
-  // 常见的模型路径
   const commonPaths = [
     "/modules/hiyori_free_zh/runtime/hiyori_free_t08.model3.json",
     "/models/hiyori/hiyori.model3.json",
@@ -403,12 +465,11 @@ const tryAutoLoadModel = async () => {
     try {
       const response = await fetch(path, { method: "HEAD" });
       if (response.ok) {
-        console.log("Found model at:", path);
         await loadModel(path);
         return true;
       }
     } catch {
-      // 继续尝试下一个
+      // Try the next known path.
     }
   }
   return false;
@@ -420,111 +481,73 @@ onMounted(async () => {
   const parent = canvasRef.value.parentElement;
   if (!parent) return;
 
-  // 等待一帧，确保父元素尺寸稳定
   await new Promise((resolve) => requestAnimationFrame(resolve));
 
-  // 初始化屏幕方向
   lastOrientation =
     window.innerWidth > window.innerHeight ? "landscape" : "portrait";
 
-  // 获取稳定的尺寸
-  const width = parent.clientWidth;
-  const height = parent.clientHeight;
-
-  // 创建 PIXI 应用，使用固定尺寸而非 resizeTo
   app = new PIXI.Application({
     view: canvasRef.value,
     backgroundAlpha: 0,
     preserveDrawingBuffer: true,
-    width,
-    height,
+    width: parent.clientWidth,
+    height: parent.clientHeight,
     antialias: true,
   });
 
-  // 监听屏幕方向变化（只响应真正的方向改变）
   window.addEventListener("resize", handleOrientationChange);
   window.addEventListener("orientationchange", handleOrientationChange);
   if (screen.orientation) {
     screen.orientation.addEventListener("change", handleOrientationChange);
   }
 
-  // 优先使用设置中的模型路径
   if (currentPet.value.modelPath) {
     await loadModel(currentPet.value.modelPath);
   } else {
-    // 尝试自动发现模型
     const found = await tryAutoLoadModel();
-    if (!found) {
-      showPlaceholder();
-    }
+    if (!found) showPlaceholder();
   }
 });
 
-// 监听设置变化，重新加载模型
 watch(
   () => currentPet.value.modelPath,
   async (newPath) => {
-    if (newPath && app) {
-      await loadModel(newPath);
-    }
-  }
+    if (newPath && app) await loadModel(newPath);
+  },
 );
 
-// 监听变换设置变化
 watch(
   () => live2dTransform.value,
   (newTransform) => {
     applyTransform(newTransform);
   },
-  { deep: true }
+  { deep: true },
 );
 
-// KeepAlive 激活时重新加载模型（仅 PC 端需要，移动端正常）
 onActivated(async () => {
-  // 非桌面端不需要重新加载
-  if (!isDesktopPlatform()) {
-    return;
-  }
+  if (!isDesktopPlatform()) return;
 
-  console.log("Live2DCanvas activated (PC), reloading model");
   if (app && currentPet.value.modelPath) {
     await loadModel(currentPet.value.modelPath);
   }
 });
 
-// KeepAlive 停用时卸载模型
-// onDeactivated(() => {
-//   console.log('Live2DCanvas deactivated, unloading model')
-//   if (model && app) {
-//     app.stage.removeChild(model)
-//     model.destroy()
-//     model = null
-//   }
-// })
-
 onUnmounted(() => {
-  // 移除事件监听器
   window.removeEventListener("resize", handleOrientationChange);
   window.removeEventListener("orientationchange", handleOrientationChange);
   if (screen.orientation) {
     screen.orientation.removeEventListener("change", handleOrientationChange);
   }
 
-  // 清除 timeout
-  if (resizeTimeout) {
-    clearTimeout(resizeTimeout);
-  }
+  if (resizeTimeout) clearTimeout(resizeTimeout);
 
   model?.destroy();
   app?.destroy(true);
 });
 
-// 获取模型边界框（窗口坐标）
 const getModelBounds = () => {
   if (!model || !app || !canvasRef.value) return null;
 
-  // Pixi 返回的是已包含 anchor、scale 和 position 的世界坐标。
-  // 再加上 canvas 相对窗口的偏移，才能与 Tauri 鼠标坐标比较。
   const bounds = model.getBounds();
   const canvasRect = canvasRef.value.getBoundingClientRect();
   const left = canvasRect.left + bounds.x;
@@ -544,8 +567,6 @@ const getModelBounds = () => {
   };
 };
 
-// 检查窗口坐标下的当前渲染像素是否属于可见模型。
-// 只读取一个 WebGL 像素，透明背景不会触发 hover。
 const isPointOnModel = (windowX: number, windowY: number) => {
   if (!model || !app || !canvasRef.value) return false;
 
@@ -569,58 +590,54 @@ const isPointOnModel = (windowX: number, windowY: number) => {
     ((windowY - canvasRect.top) / canvasRect.height) * app.screen.height;
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const extract = (app.renderer as any).plugins?.extract;
     if (!extract) return false;
 
-    // WebGL 原点在左下角，窗口坐标原点在左上角。
     const readY = Math.max(0, app.screen.height - canvasY - 1);
     const pixel = extract.pixels(
       null,
       new PIXI.Rectangle(canvasX, readY, 1, 1),
     ) as Uint8Array;
 
-    // 过滤反锯齿边缘上几乎全透明的像素。
     return pixel[3] >= 16;
   } catch {
     return false;
   }
 };
 
-// 暴露方法供外部调用
 defineExpose({
   loadModel,
-  refreshCanvas, // 刷新画布（屏幕方向变化时调用）
+  refreshCanvas,
   getModelBounds,
   isPointOnModel,
-  // 播放动作组（随机选择组内一个动作）
   playMotion: (group: string) => {
-    if (model) {
-      console.log("Playing motion group:", group);
-      model.motion(group);
-    } else {
+    if (!model) {
       console.warn("Model not loaded, cannot play motion");
+      return;
     }
+    void Promise.resolve(model.motion(group)).catch((e) =>
+      console.warn("Failed to play motion:", group, e),
+    );
   },
-  // 播放指定动作（通过组名和索引）
   playMotionByIndex: (group: string, index: number) => {
-    if (model) {
-      console.log("Playing motion:", group, "index:", index);
-      model.motion(group, index);
-    } else {
+    if (!model) {
       console.warn("Model not loaded, cannot play motion");
+      return;
     }
+    void Promise.resolve(model.motion(group, index)).catch((e) =>
+      console.warn("Failed to play motion:", group, index, e),
+    );
   },
   setExpression: (name: string) => {
-    if (model) {
-      console.log("Setting expression:", name);
-      model.expression(name);
-    }
+    if (!model) return;
+    void Promise.resolve(model.expression(name)).catch((e) =>
+      console.warn("Failed to set expression:", name, e),
+    );
   },
-  // 外部更新变换
   updateTransform: (transform: Live2DTransform) => {
     applyTransform(transform);
   },
-  // 可用的动作和表情
   availableMotions,
   availableExpressions,
   motionDetails,
@@ -632,12 +649,10 @@ defineExpose({
 <template>
   <div class="live2d-container">
     <canvas ref="canvasRef"></canvas>
-    <!-- 加载指示器 -->
     <div v-if="isLoading" class="loading-overlay">
       <div class="spinner"></div>
       <span>加载模型中...</span>
     </div>
-    <!-- 渲染警告提示 -->
     <div
       v-if="renderWarning"
       class="render-warning"
@@ -702,7 +717,6 @@ canvas {
   }
 }
 
-/* 渲染警告提示 */
 .render-warning {
   position: absolute;
   inset: 0;
