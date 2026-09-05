@@ -10,22 +10,10 @@ import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display";
 import { isDesktopPlatform } from "@desktopfriends/platform";
 import { useSettings } from "@desktopfriends/core";
+import { convertFileSrc } from "@tauri-apps/api/tauri";
 
-const convertToLocalfileUrl = (filePath: string): string => {
-  const normalizedPath = filePath.replace(/\\/g, "/");
-  const encodedPath = normalizedPath
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-
-  const protocolPath = /^[a-zA-Z]%3A\//.test(encodedPath)
-    ? `/${encodedPath}`
-    : encodedPath.startsWith("/")
-      ? encodedPath
-      : `/${encodedPath}`;
-
-  return `localfile://localhost${protocolPath}`;
-};
+const convertToLocalfileUrl = (filePath: string): string =>
+  convertFileSrc(filePath, "localfile");
 
 const isFileSystemPath = (path: string): boolean => {
   if (/^[a-zA-Z]:[\\/]/.test(path)) return true;
