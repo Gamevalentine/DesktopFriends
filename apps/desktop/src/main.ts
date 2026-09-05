@@ -1,3 +1,4 @@
+import './desktopBootstrap'
 import { createApp } from 'vue'
 import App from './App.vue'
 import ChatHistoryWindow from './views/ChatHistoryWindow.vue'
