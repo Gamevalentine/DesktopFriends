@@ -8,8 +8,8 @@ use cocoa::base::id;
 
 use std::fs;
 use std::path::Path;
-use tauri::Manager;
 use tauri::http::{Request, Response, ResponseBuilder};
+use tauri::Manager;
 
 #[derive(serde::Serialize)]
 struct CursorPosition {
@@ -27,19 +27,11 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
         use cocoa::foundation::NSPoint;
 
         unsafe {
-            // 获取全局鼠标位置
             let mouse_location: NSPoint = NSEvent::mouseLocation(nil);
-
-            // 获取窗口位置和大小
             let ns_window = window.ns_window().unwrap() as id;
             let frame = NSWindow::frame(ns_window);
-
-            // macOS 坐标系是从屏幕左下角开始的，需要转换
-            // 鼠标位置相对于窗口
             let relative_x = mouse_location.x - frame.origin.x;
             let relative_y = mouse_location.y - frame.origin.y;
-
-            // 判断是否在窗口内
             let in_window = relative_x >= 0.0
                 && relative_x <= frame.size.width
                 && relative_y >= 0.0
@@ -47,15 +39,54 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
 
             CursorPosition {
                 x: relative_x,
-                y: frame.size.height - relative_y, // 转换为从上到下的坐标
+                y: frame.size.height - relative_y,
                 in_window,
             }
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        // Windows/Linux 暂不支持，返回默认值
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+        let mut point = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            return CursorPosition {
+                x: 0.0,
+                y: 0.0,
+                in_window: false,
+            };
+        }
+
+        let Ok(position) = window.outer_position() else {
+            return CursorPosition {
+                x: 0.0,
+                y: 0.0,
+                in_window: false,
+            };
+        };
+        let Ok(size) = window.outer_size() else {
+            return CursorPosition {
+                x: 0.0,
+                y: 0.0,
+                in_window: false,
+            };
+        };
+
+        let x = point.x - position.x;
+        let y = point.y - position.y;
+        let in_window = x >= 0 && y >= 0 && x <= size.width as i32 && y <= size.height as i32;
+
+        CursorPosition {
+            x: x as f64,
+            y: y as f64,
+            in_window,
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
         CursorPosition {
             x: 0.0,
             y: 0.0,
@@ -64,7 +95,6 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
     }
 }
 
-/// 获取文件的 MIME 类型
 fn get_mime_type(path: &str) -> &'static str {
     let extension = Path::new(path)
         .extension()
@@ -84,15 +114,29 @@ fn get_mime_type(path: &str) -> &'static str {
     }
 }
 
-/// 处理自定义 localfile:// 协议请求
+fn normalize_localfile_path(path: String) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let bytes = path.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            return path[1..].to_string();
+        }
+    }
+
+    path
+}
+
 fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std::error::Error>> {
     let url = request.uri();
-    // URL 格式: localfile://localhost/path/to/file
     let path = url.replace("localfile://localhost", "");
-    // URL 解码路径
     let decoded_path = urlencoding::decode(&path)
         .map(|s| s.into_owned())
         .unwrap_or_else(|_| path.clone());
+    let decoded_path = normalize_localfile_path(decoded_path);
 
     println!("[localfile] Requested: {}", decoded_path);
 
@@ -108,7 +152,12 @@ fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std:
     match fs::read(file_path) {
         Ok(contents) => {
             let mime_type = get_mime_type(&decoded_path);
-            println!("[localfile] Serving: {} ({}, {} bytes)", decoded_path, mime_type, contents.len());
+            println!(
+                "[localfile] Serving: {} ({}, {} bytes)",
+                decoded_path,
+                mime_type,
+                contents.len()
+            );
             ResponseBuilder::new()
                 .status(200)
                 .header("Access-Control-Allow-Origin", "*")
@@ -130,7 +179,6 @@ fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std:
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![get_cursor_position])
-        // 注册自定义 localfile:// 协议，带有 CORS 头
         .register_uri_scheme_protocol("localfile", |_app, request| {
             handle_localfile_protocol(request)
         })
@@ -138,20 +186,20 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 let window = app.get_window("main").unwrap();
-
-                // 获取 NSWindow 并设置透明背景
                 let ns_window = window.ns_window().unwrap() as id;
                 unsafe {
-                    // 设置窗口背景透明
                     ns_window.setOpaque_(cocoa::base::NO);
-                    ns_window.setBackgroundColor_(cocoa::appkit::NSColor::clearColor(cocoa::base::nil));
+                    ns_window.setBackgroundColor_(cocoa::appkit::NSColor::clearColor(
+                        cocoa::base::nil,
+                    ));
 
-                    // 移除标题栏但保留窗口控制
                     let mut style_mask = ns_window.styleMask();
                     style_mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;
                     ns_window.setStyleMask_(style_mask);
                     ns_window.setTitlebarAppearsTransparent_(cocoa::base::YES);
-                    ns_window.setTitleVisibility_(cocoa::appkit::NSWindowTitleVisibility::NSWindowTitleHidden);
+                    ns_window.setTitleVisibility_(
+                        cocoa::appkit::NSWindowTitleVisibility::NSWindowTitleHidden,
+                    );
                 }
             }
             Ok(())
