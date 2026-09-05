@@ -156,13 +156,14 @@ fn get_mime_type(path: &str) -> &'static str {
 
     match extension.to_lowercase().as_str() {
         "json" => "application/json",
-        "moc3" | "moc" => "application/octet-stream",
+        "moc3" | "moc" | "mtn" => "application/octet-stream",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
-        "motion3.json" => "application/json",
-        "exp3.json" => "application/json",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
         _ => "application/octet-stream",
     }
 }
@@ -181,10 +182,8 @@ fn normalize_localfile_path(path: String) -> String {
             normalized.remove(0);
         }
 
-        // Existing desktop code encodes a Windows path as part of the custom URL host.
-        // Relative Live2D assets can therefore arrive as:
-        // C:/.../model.model3.json/textures/texture.png
-        // Convert that back to the model directory before reading the asset.
+        // Keep compatibility with URLs produced by older builds where Pixi's
+        // resolver could append a relative asset after the model JSON filename.
         let lower = normalized.to_ascii_lowercase();
         for marker in [".model3.json/", ".model.json/"] {
             if let Some(marker_start) = lower.find(marker) {
@@ -204,13 +203,28 @@ fn normalize_localfile_path(path: String) -> String {
     }
 }
 
-fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std::error::Error>> {
-    let url = request.uri();
-    let path = url.replace("localfile://localhost", "");
-    let decoded_path = urlencoding::decode(&path)
+fn localfile_uri_to_path(uri: &str) -> String {
+    // Tauri custom protocols are platform-specific. On macOS/Linux the URL is
+    // localfile://localhost/..., while WebView2 on Windows exposes the same
+    // protocol as https://localfile.localhost/... (or http when configured).
+    let encoded_path = [
+        "localfile://localhost",
+        "https://localfile.localhost",
+        "http://localfile.localhost",
+    ]
+    .iter()
+    .find_map(|prefix| uri.strip_prefix(prefix))
+    .unwrap_or(uri);
+
+    let decoded_path = urlencoding::decode(encoded_path)
         .map(|s| s.into_owned())
-        .unwrap_or_else(|_| path.clone());
-    let decoded_path = normalize_localfile_path(decoded_path);
+        .unwrap_or_else(|_| encoded_path.to_string());
+
+    normalize_localfile_path(decoded_path)
+}
+
+fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std::error::Error>> {
+    let decoded_path = localfile_uri_to_path(request.uri());
 
     println!("[localfile] Requested: {}", decoded_path);
 
@@ -252,7 +266,7 @@ fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std:
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::normalize_localfile_path;
+    use super::{localfile_uri_to_path, normalize_localfile_path};
 
     #[test]
     fn strips_leading_slash_before_windows_drive() {
@@ -287,6 +301,26 @@ mod tests {
                 "C:/Users/Test/models/Shizuku/shizuku.model.json/motions/idle.mtn".into()
             ),
             "C:/Users/Test/models/Shizuku/motions/idle.mtn"
+        );
+    }
+
+    #[test]
+    fn decodes_windows_tauri_custom_protocol_url() {
+        assert_eq!(
+            localfile_uri_to_path(
+                "https://localfile.localhost/C%3A/Users/Test/models/Shizuku/shizuku.model.json"
+            ),
+            "C:/Users/Test/models/Shizuku/shizuku.model.json"
+        );
+    }
+
+    #[test]
+    fn decodes_native_custom_protocol_url() {
+        assert_eq!(
+            localfile_uri_to_path(
+                "localfile://localhost/C%3A/Users/Test/models/Hiyori/Hiyori.model3.json"
+            ),
+            "C:/Users/Test/models/Hiyori/Hiyori.model3.json"
         );
     }
 }
