@@ -109,10 +109,12 @@ const getRequiredModelReferences = (jsonContent: string): string[] => {
 const validateZipStructure = (zip: JSZip): ValidationResult => {
   const errors: string[] = []
   const warnings: string[] = []
-  const rawFiles = Object.keys(zip.files)
-  const safeFiles = rawFiles.map(normalizeArchivePath).filter((f): f is string => Boolean(f))
+  const fileEntries = Object.entries(zip.files).filter(([, entry]) => !entry.dir)
+  const safeFiles = fileEntries
+    .map(([path]) => normalizeArchivePath(path))
+    .filter((f): f is string => Boolean(f))
 
-  if (safeFiles.length !== rawFiles.filter((f) => !zip.files[f].dir).length) {
+  if (safeFiles.length !== fileEntries.length) {
     errors.push('压缩包包含不安全或无效的文件路径')
   }
 
