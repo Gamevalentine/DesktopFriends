@@ -41,13 +41,17 @@ jobs:
       - name: Build shared packages
         run: pnpm build:packages
 
+      - name: Build desktop frontend
+        working-directory: apps/desktop
+        run: pnpm build
+
       - name: Run Windows Rust tests
         working-directory: apps/desktop/src-tauri
         run: cargo test --locked
 
       - name: Build Windows desktop app
         working-directory: apps/desktop
-        run: pnpm tauri build -- --locked
+        run: pnpm tauri build
 
       - name: Smoke launch Windows executable
         shell: pwsh
