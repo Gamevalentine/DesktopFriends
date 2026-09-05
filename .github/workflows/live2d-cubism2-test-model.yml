@@ -1,0 +1,30 @@
+name: Package Cubism2 Test Model
+
+on:
+  push:
+    branches:
+      - live2d-test-artifact
+    paths:
+      - '.github/workflows/live2d-cubism2-test-model.yml'
+
+jobs:
+  package-model:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout pixi-live2d-display test assets
+        uses: actions/checkout@v4
+        with:
+          repository: guansss/pixi-live2d-display
+          path: pixi-live2d-display
+
+      - name: Package Shizuku Cubism2 model
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "pixi-live2d-display/test/assets/shizuku/*" -DestinationPath "Shizuku-Cubism2-Test-Model.zip" -Force
+
+      - name: Upload test model
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shizuku-Cubism2-Test-Model
+          path: Shizuku-Cubism2-Test-Model.zip
+          if-no-files-found: error
