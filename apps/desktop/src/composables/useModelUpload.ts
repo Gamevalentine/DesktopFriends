@@ -13,7 +13,7 @@ import JSZip from 'jszip'
 
 export interface UploadProgress {
   stage: 'reading' | 'extracting' | 'saving' | 'done' | 'error'
-  progress: number // 0-100
+  progress: number
   message: string
 }
 
@@ -23,13 +23,11 @@ export interface ValidationResult {
   warnings: string[]
 }
 
-// 动作组信息
 export interface MotionGroupInfo {
   group: string
   count: number
 }
 
-// 模型上传结果信息
 export interface ModelUploadInfo {
   modelName: string
   expressionCount: number
@@ -38,50 +36,109 @@ export interface ModelUploadInfo {
   totalFiles: number
 }
 
-// 上传结果
 export interface UploadResult {
   path: string
   info: ModelUploadInfo
 }
 
-/**
- * 验证 zip 包是否包含有效的 Live2D 模型文件
- */
+interface ModelCandidate {
+  path: string
+  content: string
+}
+
+const normalizeArchivePath = (path: string): string | null => {
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\/+/, '')
+  if (!normalized || normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) {
+    return null
+  }
+
+  const parts: string[] = []
+  for (const part of normalized.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..' || part.includes('\0')) return null
+    parts.push(part)
+  }
+
+  return parts.length > 0 ? parts.join('/') : null
+}
+
+const resolveArchiveReference = (baseDir: string, reference: string): string | null => {
+  const ref = reference.replace(/\\/g, '/')
+  if (!ref || ref.startsWith('/') || /^[a-zA-Z]:\//.test(ref)) return null
+
+  const parts = baseDir ? baseDir.split('/').filter(Boolean) : []
+  for (const part of ref.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (parts.length === 0) return null
+      parts.pop()
+      continue
+    }
+    if (part.includes('\0')) return null
+    parts.push(part)
+  }
+
+  return parts.length > 0 ? parts.join('/') : null
+}
+
+const getRequiredModelReferences = (jsonContent: string): string[] => {
+  try {
+    const modelData = JSON.parse(jsonContent)
+
+    if (modelData.FileReferences) {
+      const refs = modelData.FileReferences
+      const required: string[] = []
+      if (typeof refs.Moc === 'string') required.push(refs.Moc)
+      if (Array.isArray(refs.Textures)) {
+        required.push(...refs.Textures.filter((item: unknown): item is string => typeof item === 'string'))
+      }
+      return required
+    }
+
+    const required: string[] = []
+    if (typeof modelData.model === 'string') required.push(modelData.model)
+    if (Array.isArray(modelData.textures)) {
+      required.push(...modelData.textures.filter((item: unknown): item is string => typeof item === 'string'))
+    }
+    return required
+  } catch {
+    return []
+  }
+}
+
 const validateZipStructure = (zip: JSZip): ValidationResult => {
   const errors: string[] = []
   const warnings: string[] = []
+  const rawFiles = Object.keys(zip.files)
+  const safeFiles = rawFiles.map(normalizeArchivePath).filter((f): f is string => Boolean(f))
 
-  const files = Object.keys(zip.files)
+  if (safeFiles.length !== rawFiles.filter((f) => !zip.files[f].dir).length) {
+    errors.push('压缩包包含不安全或无效的文件路径')
+  }
 
-  // 检查模型配置文件
-  const hasModelJson = files.some(
-    (f) =>
-      f.toLowerCase().endsWith('.model3.json') || f.toLowerCase().endsWith('.model.json')
+  const hasModelJson = safeFiles.some(
+    (f) => f.toLowerCase().endsWith('.model3.json') || f.toLowerCase().endsWith('.model.json')
   )
   if (!hasModelJson) {
     errors.push('缺少模型配置文件 (.model3.json 或 .model.json)')
   }
 
-  // 检查模型数据文件
-  const hasMoc = files.some(
+  const hasMoc = safeFiles.some(
     (f) => f.toLowerCase().endsWith('.moc3') || f.toLowerCase().endsWith('.moc')
   )
   if (!hasMoc) {
     errors.push('缺少模型数据文件 (.moc3 或 .moc)')
   }
 
-  // 检查纹理文件
-  const hasTexture = files.some(
+  const hasTexture = safeFiles.some(
     (f) => f.toLowerCase().endsWith('.png') && !f.toLowerCase().includes('__macosx')
   )
   if (!hasTexture) {
     errors.push('缺少纹理文件 (.png)')
   }
 
-  // 警告：缺少动作
-  const hasMotion = files.some(
-    (f) =>
-      f.toLowerCase().endsWith('.motion3.json') || f.toLowerCase().endsWith('.motion.json')
+  const hasMotion = safeFiles.some(
+    (f) => f.toLowerCase().endsWith('.motion3.json') || f.toLowerCase().endsWith('.motion.json')
   )
   if (!hasMotion) {
     warnings.push('未找到动作文件，模型可能无法播放动作')
@@ -92,6 +149,52 @@ const validateZipStructure = (zip: JSZip): ValidationResult => {
     errors,
     warnings,
   }
+}
+
+const findUsableModel = async (zip: JSZip): Promise<ModelCandidate | null> => {
+  const candidates: Array<{ path: string; entry: JSZip.JSZipObject }> = []
+
+  for (const [rawPath, entry] of Object.entries(zip.files)) {
+    if (entry.dir) continue
+    const path = normalizeArchivePath(rawPath)
+    if (!path) continue
+    const lower = path.toLowerCase()
+    if (lower.endsWith('.model3.json') || lower.endsWith('.model.json')) {
+      candidates.push({ path, entry })
+    }
+  }
+
+  candidates.sort((a, b) => {
+    const depthDiff = a.path.split('/').length - b.path.split('/').length
+    return depthDiff !== 0 ? depthDiff : a.path.length - b.path.length
+  })
+
+  const available = new Set(
+    Object.keys(zip.files)
+      .filter((rawPath) => !zip.files[rawPath].dir)
+      .map(normalizeArchivePath)
+      .filter((path): path is string => Boolean(path))
+  )
+
+  for (const candidate of candidates) {
+    const content = await candidate.entry.async('string')
+    const baseDir = candidate.path.includes('/')
+      ? candidate.path.substring(0, candidate.path.lastIndexOf('/'))
+      : ''
+    const requiredRefs = getRequiredModelReferences(content)
+
+    if (requiredRefs.length === 0) continue
+    const allRequiredFilesExist = requiredRefs.every((reference) => {
+      const resolved = resolveArchiveReference(baseDir, reference)
+      return resolved !== null && available.has(resolved)
+    })
+
+    if (allRequiredFilesExist) {
+      return { path: candidate.path, content }
+    }
+  }
+
+  return null
 }
 
 export function useModelUpload() {
@@ -107,9 +210,6 @@ export function useModelUpload() {
     uploadProgress.value = { stage, progress, message }
   }
 
-  /**
-   * 打开文件选择对话框
-   */
   const selectModelFile = async (): Promise<string | null> => {
     try {
       const selected = await open({
@@ -122,24 +222,15 @@ export function useModelUpload() {
         ],
       })
 
-      if (typeof selected === 'string') {
-        return selected
-      }
-      return null
+      return typeof selected === 'string' ? selected : null
     } catch (e) {
       console.error('File selection error:', e)
       return null
     }
   }
 
-  /**
-   * 上传并解压 Live2D 模型 zip 文件
-   * @param filePath 用户选择的 zip 文件路径
-   * @param modelName 模型名称（用作文件夹名）
-   * @returns 上传结果（包含路径和模型信息），失败返回 null
-   */
   const uploadModel = async (filePath: string, modelName: string): Promise<UploadResult | null> => {
-    if (!filePath.endsWith('.zip')) {
+    if (!filePath.toLowerCase().endsWith('.zip')) {
       error.value = '请选择 zip 格式的模型文件'
       return null
     }
@@ -148,134 +239,86 @@ export function useModelUpload() {
     error.value = null
 
     try {
-      // 阶段1: 读取 zip 文件
       updateProgress('reading', 10, '正在读取文件...')
       const fileData = await readBinaryFile(filePath)
-      const arrayBuffer = fileData.buffer
 
-      // 阶段2: 解压 zip
       updateProgress('extracting', 30, '正在解压模型...')
-      const zip = await JSZip.loadAsync(arrayBuffer)
+      const zip = await JSZip.loadAsync(fileData.buffer)
 
-      // 验证压缩包结构
       const validation = validateZipStructure(zip)
       if (!validation.valid) {
         throw new Error(
           '压缩包格式不符合要求：\n' +
             validation.errors.join('\n') +
-            '\n\n请确保压缩包包含完整的 Live2D 模型文件。'
+            '\n\n请确保压缩包包含完整且安全的 Live2D 模型文件。'
         )
       }
 
-      // 查找模型文件 (model.json 或 model3.json)
-      let foundModelPath: string | null = null
-      let modelJsonContent: string | null = null
-
-      for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-        const fileName = relativePath.toLowerCase()
-        if (fileName.endsWith('.model3.json') || fileName.endsWith('.model.json')) {
-          if (!foundModelPath || relativePath.length < foundModelPath.length) {
-            // 优先选择路径最短的（最顶层的）
-            foundModelPath = relativePath
-            // 读取模型 JSON 内容
-            modelJsonContent = await zipEntry.async('string')
-          }
-        }
+      const candidate = await findUsableModel(zip)
+      if (!candidate) {
+        throw new Error('未找到引用完整的模型文件，请检查 moc/moc3 与纹理是否齐全')
       }
 
-      if (!foundModelPath || !modelJsonContent) {
-        throw new Error('未找到模型文件 (model.json 或 model3.json)')
-      }
-
-      // 解析模型 JSON 获取信息
+      const modelJsonPath = candidate.path
+      const modelJsonContent = candidate.content
       const modelInfo = parseModelJson(modelJsonContent, modelName)
-
-      const modelJsonPath: string = foundModelPath
-
-      // 获取模型所在的目录
       const modelDir = modelJsonPath.includes('/')
         ? modelJsonPath.substring(0, modelJsonPath.lastIndexOf('/'))
         : ''
 
-      // 清理模型名称，移除非法字符
-      const safeModelName = modelName.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '_')
+      const safeModelName =
+        modelName.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '_').replace(/^_+|_+$/g, '') ||
+        `model_${Date.now()}`
 
-      // 获取应用数据目录
       const appData = await appDataDir()
-      const targetDir = await join(appData, 'models', safeModelName)
+      const modelsDir = await join(appData, 'models')
+      const targetDir = await join(modelsDir, safeModelName)
 
-      // 阶段3: 保存文件
       updateProgress('saving', 50, '正在保存模型文件...')
+      await createDir(modelsDir, { recursive: true })
+      await createDir(targetDir, { recursive: true })
 
-      // 确保目标目录存在
-      try {
-        await createDir(await join(appData, 'models'), { recursive: true })
-      } catch {
-        // 目录可能已存在
-      }
-
-      try {
-        await createDir(targetDir, { recursive: true })
-      } catch {
-        // 目录可能已存在
-      }
-
-      // 解压并保存所有文件
       const files = Object.keys(zip.files)
       let savedCount = 0
+      let eligibleCount = 0
 
-      for (const filePath of files) {
-        const zipEntry = zip.files[filePath]
-        if (zipEntry.dir) continue // 跳过目录
+      for (const rawPath of files) {
+        const zipEntry = zip.files[rawPath]
+        if (zipEntry.dir) continue
 
-        // 计算相对路径（相对于模型目录）
-        let relativePath = filePath
-        if (modelDir && filePath.startsWith(modelDir + '/')) {
-          relativePath = filePath.substring(modelDir.length + 1)
-        } else if (modelDir && filePath.startsWith(modelDir)) {
-          relativePath = filePath.substring(modelDir.length)
+        const safePath = normalizeArchivePath(rawPath)
+        if (!safePath) continue
+
+        if (modelDir && safePath !== modelJsonPath && !safePath.startsWith(`${modelDir}/`)) {
+          continue
         }
+
+        eligibleCount++
+        const relativePath = modelDir ? safePath.substring(modelDir.length + 1) : safePath
+        if (!relativePath) continue
 
         const targetPath = await join(targetDir, relativePath)
-
-        // 确保父目录存在
         const lastSlashIndex = relativePath.lastIndexOf('/')
         if (lastSlashIndex > 0) {
-          const parentDir = relativePath.substring(0, lastSlashIndex)
-          const parentPath = await join(targetDir, parentDir)
-          try {
-            await createDir(parentPath, { recursive: true })
-          } catch {
-            // 目录可能已存在
-          }
+          const parentPath = await join(targetDir, relativePath.substring(0, lastSlashIndex))
+          await createDir(parentPath, { recursive: true })
         }
 
-        // 判断是否是文本文件
-        const isTextFile = /\.(json|txt|html|css|js|xml)$/i.test(filePath)
-
+        const isTextFile = /\.(json|txt|html|css|js|xml)$/i.test(relativePath)
         if (isTextFile) {
-          // 文本文件
-          const textContent = await zipEntry.async('string')
-          await writeTextFile(targetPath, textContent)
+          await writeTextFile(targetPath, await zipEntry.async('string'))
         } else {
-          // 二进制文件
-          const binaryContent = await zipEntry.async('uint8array')
-          await writeBinaryFile(targetPath, binaryContent)
+          await writeBinaryFile(targetPath, await zipEntry.async('uint8array'))
         }
 
         savedCount++
-        const progress = 50 + Math.floor((savedCount / files.length) * 40)
-        updateProgress('saving', progress, `正在保存文件 (${savedCount}/${files.length})...`)
+        const progressBase = Math.max(eligibleCount, 1)
+        const progress = 50 + Math.min(40, Math.floor((savedCount / progressBase) * 40))
+        updateProgress('saving', progress, `正在保存文件 (${savedCount})...`)
       }
 
-      // 更新总文件数
       modelInfo.totalFiles = savedCount
-
-      // 获取模型 JSON 的完整路径
-      const modelFileName = modelJsonPath.includes('/')
-        ? modelJsonPath.substring(modelJsonPath.lastIndexOf('/') + 1)
-        : modelJsonPath
-
+      const modelFileName = modelJsonPath.substring(modelJsonPath.lastIndexOf('/') + 1)
       const resultPath = await join(targetDir, modelFileName)
 
       updateProgress('done', 100, '模型上传成功！')
@@ -293,14 +336,10 @@ export function useModelUpload() {
     }
   }
 
-  /**
-   * 获取已上传的模型列表
-   */
   const getUploadedModels = async (): Promise<string[]> => {
     try {
       const appData = await appDataDir()
       const modelsDir = await join(appData, 'models')
-
       const result = await readDir(modelsDir)
       return result.filter((f) => f.children !== undefined).map((f) => f.name || '')
     } catch {
@@ -308,16 +347,12 @@ export function useModelUpload() {
     }
   }
 
-  /**
-   * 获取已上传模型的路径
-   */
   const getModelPath = async (modelName: string): Promise<string | null> => {
     try {
       const appData = await appDataDir()
       const modelDir = await join(appData, 'models', modelName)
       const files = await readDir(modelDir)
 
-      // 查找模型 JSON 文件
       for (const file of files) {
         const fileName = file.name?.toLowerCase() || ''
         if (fileName.endsWith('.model3.json') || fileName.endsWith('.model.json')) {
@@ -331,14 +366,10 @@ export function useModelUpload() {
     }
   }
 
-  /**
-   * 删除已上传的模型
-   */
   const deleteModel = async (modelName: string): Promise<boolean> => {
     try {
       const appData = await appDataDir()
       const modelDir = await join(appData, 'models', modelName)
-
       await removeDir(modelDir, { recursive: true })
       return true
     } catch (e) {
@@ -347,9 +378,6 @@ export function useModelUpload() {
     }
   }
 
-  /**
-   * 解析模型 JSON 获取模型信息
-   */
   const parseModelJson = (jsonContent: string, modelName: string): ModelUploadInfo => {
     const info: ModelUploadInfo = {
       modelName,
@@ -362,53 +390,38 @@ export function useModelUpload() {
     try {
       const modelData = JSON.parse(jsonContent)
 
-      // Cubism 3/4 格式 (model3.json)
       if (modelData.FileReferences) {
         const fileRefs = modelData.FileReferences
 
-        // 表情
-        if (fileRefs.Expressions && Array.isArray(fileRefs.Expressions)) {
+        if (Array.isArray(fileRefs.Expressions)) {
           info.expressionCount = fileRefs.Expressions.length
         }
 
-        // 动作
         if (fileRefs.Motions) {
           for (const [groupName, motions] of Object.entries(fileRefs.Motions)) {
             if (Array.isArray(motions)) {
-              info.motionGroups.push({
-                group: groupName,
-                count: motions.length,
-              })
+              info.motionGroups.push({ group: groupName, count: motions.length })
             }
           }
         }
 
-        // 纹理
-        if (fileRefs.Textures && Array.isArray(fileRefs.Textures)) {
+        if (Array.isArray(fileRefs.Textures)) {
           info.textureCount = fileRefs.Textures.length
         }
-      }
-      // Cubism 2 格式 (model.json)
-      else {
-        // 表情
-        if (modelData.expressions && Array.isArray(modelData.expressions)) {
+      } else {
+        if (Array.isArray(modelData.expressions)) {
           info.expressionCount = modelData.expressions.length
         }
 
-        // 动作
         if (modelData.motions) {
           for (const [groupName, motions] of Object.entries(modelData.motions)) {
             if (Array.isArray(motions)) {
-              info.motionGroups.push({
-                group: groupName,
-                count: motions.length,
-              })
+              info.motionGroups.push({ group: groupName, count: motions.length })
             }
           }
         }
 
-        // 纹理
-        if (modelData.textures && Array.isArray(modelData.textures)) {
+        if (Array.isArray(modelData.textures)) {
           info.textureCount = modelData.textures.length
         }
       }
