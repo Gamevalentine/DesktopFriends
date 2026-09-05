@@ -4,6 +4,11 @@ import dts from 'vite-plugin-dts'
 import { resolve } from 'path'
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@tauri-apps/api/tauri': resolve(__dirname, 'src/shims/tauri-file-src.ts'),
+    },
+  },
   plugins: [
     vue(),
     dts({
@@ -26,7 +31,6 @@ export default defineConfig({
         '@desktopfriends/core',
         '@desktopfriends/shared',
         '@desktopfriends/platform',
-        '@tauri-apps/api/tauri',
       ],
       output: {
         globals: {
