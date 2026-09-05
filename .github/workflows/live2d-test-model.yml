@@ -1,0 +1,27 @@
+name: Package Hiyori Test Model
+
+on:
+  push:
+    branches:
+      - live2d-test-artifact
+
+permissions:
+  contents: read
+
+jobs:
+  package-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Package bundled Hiyori model
+        working-directory: apps/desktop/public/modules/hiyori_free_zh/runtime
+        run: zip -r "$GITHUB_WORKSPACE/Hiyori-Test-Model.zip" .
+
+      - name: Upload test model
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hiyori-Test-Model
+          path: Hiyori-Test-Model.zip
+          if-no-files-found: error
