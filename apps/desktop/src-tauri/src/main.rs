@@ -73,8 +73,7 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
         }
 
         // Convert from virtual-screen coordinates to the WebView client area.
-        // This avoids offsets from window borders and works correctly with
-        // monitors positioned left/above the primary display.
+        // This handles secondary monitors with negative virtual-screen offsets.
         if unsafe { ScreenToClient(hwnd, &mut point) } == 0 {
             return CursorPosition {
                 x: 0.0,
@@ -97,6 +96,11 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
             };
         }
 
+        // Win32 coordinates are physical pixels while DOM/Live2D hit testing uses
+        // logical (CSS) pixels. Convert using the current monitor scale factor so
+        // 125%/150% DPI does not shift the interactive region.
+        let scale_factor = window.scale_factor().unwrap_or(1.0).max(f64::EPSILON);
+
         // Win32 RECT's right/bottom edges are exclusive.
         let in_window = point.x >= client_rect.left
             && point.x < client_rect.right
@@ -104,8 +108,8 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
             && point.y < client_rect.bottom;
 
         CursorPosition {
-            x: point.x as f64,
-            y: point.y as f64,
+            x: point.x as f64 / scale_factor,
+            y: point.y as f64 / scale_factor,
             in_window,
         }
     }
