@@ -11,6 +11,35 @@ use std::path::Path;
 use tauri::http::{Request, Response, ResponseBuilder};
 use tauri::Manager;
 
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct WinPoint {
+    x: i32,
+    y: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct WinRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
+    #[link_name = "GetCursorPos"]
+    fn win_get_cursor_pos(point: *mut WinPoint) -> i32;
+
+    #[link_name = "ScreenToClient"]
+    fn win_screen_to_client(hwnd: *mut std::ffi::c_void, point: *mut WinPoint) -> i32;
+
+    #[link_name = "GetClientRect"]
+    fn win_get_client_rect(hwnd: *mut std::ffi::c_void, rect: *mut WinRect) -> i32;
+}
+
 #[derive(serde::Serialize)]
 struct CursorPosition {
     x: f64,
@@ -47,13 +76,8 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
 
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::Foundation::{POINT, RECT};
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetClientRect, GetCursorPos, ScreenToClient,
-        };
-
         let hwnd = match window.hwnd() {
-            Ok(hwnd) => hwnd.0 as windows_sys::Win32::Foundation::HWND,
+            Ok(hwnd) => hwnd.0 as *mut std::ffi::c_void,
             Err(_) => {
                 return CursorPosition {
                     x: 0.0,
@@ -63,8 +87,8 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
             }
         };
 
-        let mut point = POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut point) } == 0 {
+        let mut point = WinPoint { x: 0, y: 0 };
+        if unsafe { win_get_cursor_pos(&mut point) } == 0 {
             return CursorPosition {
                 x: 0.0,
                 y: 0.0,
@@ -74,7 +98,7 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
 
         // Convert from virtual-screen coordinates to the WebView client area.
         // This handles secondary monitors with negative virtual-screen offsets.
-        if unsafe { ScreenToClient(hwnd, &mut point) } == 0 {
+        if unsafe { win_screen_to_client(hwnd, &mut point) } == 0 {
             return CursorPosition {
                 x: 0.0,
                 y: 0.0,
@@ -82,13 +106,13 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
             };
         }
 
-        let mut client_rect = RECT {
+        let mut client_rect = WinRect {
             left: 0,
             top: 0,
             right: 0,
             bottom: 0,
         };
-        if unsafe { GetClientRect(hwnd, &mut client_rect) } == 0 {
+        if unsafe { win_get_client_rect(hwnd, &mut client_rect) } == 0 {
             return CursorPosition {
                 x: 0.0,
                 y: 0.0,
