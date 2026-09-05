@@ -222,6 +222,47 @@ fn handle_localfile_protocol(request: &Request) -> Result<Response, Box<dyn std:
     }
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::normalize_localfile_path;
+
+    #[test]
+    fn strips_leading_slash_before_windows_drive() {
+        assert_eq!(
+            normalize_localfile_path("/C:/Users/Test/AppData/Roaming/model.model3.json".into()),
+            "C:/Users/Test/AppData/Roaming/model.model3.json"
+        );
+    }
+
+    #[test]
+    fn normalizes_windows_backslashes() {
+        assert_eq!(
+            normalize_localfile_path("C:\\Users\\Test\\model.model3.json".into()),
+            "C:/Users/Test/model.model3.json"
+        );
+    }
+
+    #[test]
+    fn resolves_relative_live2d_texture_after_model_url() {
+        assert_eq!(
+            normalize_localfile_path(
+                "C:/Users/Test/models/Hiyori/Hiyori.model3.json/textures/texture_00.png".into()
+            ),
+            "C:/Users/Test/models/Hiyori/textures/texture_00.png"
+        );
+    }
+
+    #[test]
+    fn resolves_relative_cubism2_asset_after_model_url() {
+        assert_eq!(
+            normalize_localfile_path(
+                "C:/Users/Test/models/Shizuku/shizuku.model.json/motions/idle.mtn".into()
+            ),
+            "C:/Users/Test/models/Shizuku/motions/idle.mtn"
+        );
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![get_cursor_position])
