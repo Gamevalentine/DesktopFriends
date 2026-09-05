@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - windows-support
+      - live2d-hardening
   workflow_dispatch:
 
 permissions:
