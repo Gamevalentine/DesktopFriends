@@ -41,9 +41,43 @@ jobs:
       - name: Build shared packages
         run: pnpm build:packages
 
+      - name: Run Windows Rust tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+
       - name: Build Windows desktop app
         working-directory: apps/desktop
         run: pnpm tauri build
+
+      - name: Smoke launch Windows executable
+        shell: pwsh
+        run: |
+          $exe = "apps/desktop/src-tauri/target/release/tablefri.exe"
+          if (!(Test-Path $exe)) {
+            throw "Windows executable was not produced: $exe"
+          }
+
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 5
+          $process.Refresh()
+
+          if ($process.HasExited) {
+            throw "TableFri exited during startup smoke test with code $($process.ExitCode)"
+          }
+
+          Stop-Process -Id $process.Id -Force
+
+      - name: Verify Windows installers
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem "apps/desktop/src-tauri/target/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue
+          $exe = Get-ChildItem "apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue
+
+          if (!$msi) { throw "MSI installer was not produced" }
+          if (!$exe) { throw "NSIS setup EXE was not produced" }
+
+          Write-Host "MSI: $($msi.FullName)"
+          Write-Host "EXE: $($exe.FullName)"
 
       - name: Upload Windows bundles
         uses: actions/upload-artifact@v4
