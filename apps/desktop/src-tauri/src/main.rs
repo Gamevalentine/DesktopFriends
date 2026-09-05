@@ -47,8 +47,21 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
 
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::Foundation::POINT;
-        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetClientRect, GetCursorPos, ScreenToClient,
+        };
+
+        let hwnd = match window.hwnd() {
+            Ok(hwnd) => hwnd.0 as windows_sys::Win32::Foundation::HWND,
+            Err(_) => {
+                return CursorPosition {
+                    x: 0.0,
+                    y: 0.0,
+                    in_window: false,
+                }
+            }
+        };
 
         let mut point = POINT { x: 0, y: 0 };
         if unsafe { GetCursorPos(&mut point) } == 0 {
@@ -59,28 +72,40 @@ fn get_cursor_position(window: tauri::Window) -> CursorPosition {
             };
         }
 
-        let Ok(position) = window.outer_position() else {
+        // Convert from virtual-screen coordinates to the WebView client area.
+        // This avoids offsets from window borders and works correctly with
+        // monitors positioned left/above the primary display.
+        if unsafe { ScreenToClient(hwnd, &mut point) } == 0 {
             return CursorPosition {
                 x: 0.0,
                 y: 0.0,
                 in_window: false,
             };
-        };
-        let Ok(size) = window.outer_size() else {
-            return CursorPosition {
-                x: 0.0,
-                y: 0.0,
-                in_window: false,
-            };
-        };
+        }
 
-        let x = point.x - position.x;
-        let y = point.y - position.y;
-        let in_window = x >= 0 && y >= 0 && x <= size.width as i32 && y <= size.height as i32;
+        let mut client_rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if unsafe { GetClientRect(hwnd, &mut client_rect) } == 0 {
+            return CursorPosition {
+                x: 0.0,
+                y: 0.0,
+                in_window: false,
+            };
+        }
+
+        // Win32 RECT's right/bottom edges are exclusive.
+        let in_window = point.x >= client_rect.left
+            && point.x < client_rect.right
+            && point.y >= client_rect.top
+            && point.y < client_rect.bottom;
 
         CursorPosition {
-            x: x as f64,
-            y: y as f64,
+            x: point.x as f64,
+            y: point.y as f64,
             in_window,
         }
     }
